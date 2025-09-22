@@ -1,0 +1,1545 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador Integración Open Orders</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        rappi: {
+                            'primary': '#fa3d22',
+                            'primary-light': '#f6553f',
+                            'primary-dark': '#c81c20',
+                            'secondary': '#a46484',
+                            'background': '#d2bca5',
+                            'text': '#4c2c24',
+                        },
+                    },
+                },
+            },
+        };
+    </script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Establece el nivel de log para depuración
+        setLogLevel('debug');
+
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        let userId = null;
+        let isAuthReady = false;
+        let rappiApiUrl = 'https://services.rappi.com.br'; // URL por defecto
+        let rappiAccessToken = '';
+        let webhookAuthHeaderName = '';
+        let webhookAuthToken = '';
+
+        const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/orders`);
+        const webhookConfigDocRef = doc(db, `artifacts/${appId}/public/data/webhooks/config`);
+        const rappiConfigDocRef = doc(db, `artifacts/${appId}/public/data/rappi-config/credentials`);
+
+        const logs = [];
+
+        // Elementos de la UI
+        const createOrderForm = document.getElementById('createOrderForm');
+        const addProductBtn = document.getElementById('addProductBtn');
+        const productsContainer = document.getElementById('productsContainer');
+        const logsContainer = document.getElementById('logsContainer');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const webhookForm = document.getElementById('webhookForm');
+        const webhookUrlInput = document.getElementById('webhookUrl');
+        const openOrdersList = document.getElementById('openOrdersList');
+        const alliedOrdersList = document.getElementById('alliedOrdersList');
+        const authForm = document.getElementById('authForm');
+        const countrySelect = document.getElementById('countrySelect');
+        const webhookAuthForm = document.getElementById('webhookAuthForm');
+        const webhookAuthHeaderNameInput = document.getElementById('webhookAuthHeaderName');
+        const webhookAuthTokenInput = document.getElementById('webhookAuthToken');
+        const cancelModal = document.getElementById('cancelModal');
+        const cancelForm = document.getElementById('cancelForm');
+        const cancelDetailsInput = document.getElementById('cancelDetails');
+        const cancelReasonSelect = document.getElementById('cancelReason');
+        const substitutionModal = document.getElementById('substitutionModal');
+        const substitutionForm = document.getElementById('substitutionForm');
+        const substitutionOriginalProductIdInput = document.getElementById('substitutionOriginalProductId');
+        const sendCancelBtn = document.getElementById('sendCancelBtn');
+        const substituteBtn = document.getElementById('substituteBtn');
+        const langSelect = document.getElementById('langSelect');
+
+        const countryUrls = {
+            'ARG': 'https://services.rappi.com.ar',
+            'BRA': 'https://services.rappi.com.br',
+            'CHL': 'https://services.rappi.cl',
+            'COL': 'https://services.grability.rappi.com',
+            'CRI': 'https://services.rappi.co.cr',
+            'ECU': 'https://services.rappi.com.ec',
+            'MEX': 'https://services.mxgrability.rappi.com',
+            'PER': 'https://services.rappi.pe',
+            'URY': 'https://services.rappi.com.uy'
+        };
+
+        const reasonsWithDetails = [
+            'order_id_duplicated',
+            'products_not_found',
+            'products_stock_out',
+            'products_price_difference'
+        ];
+
+        const translations = {
+            es: {
+                pageTitle: "Simulador Integración Open Orders",
+                pageDescription: "Herramienta para probar la comunicación entre un endpoint de pedidos y un webhook.",
+                userId: "ID de usuario:",
+                createOrderTitle: "Crear Orden",
+                clientDataTitle: "Datos del Cliente",
+                clientName: "Nombre del Cliente",
+                clientLastName: "Apellido del Cliente",
+                clientEmail: "Email del Cliente",
+                clientPhone: "Teléfono del Cliente",
+                storeDataTitle: "Datos de la Tienda",
+                storeId: "ID de la Tienda",
+                storeName: "Nombre de la Tienda",
+                storePhysicalId: "ID Físico de la Tienda",
+                productsTitle: "Productos",
+                addProduct: "Añadir Producto",
+                simulateOrder: "Simular Nueva Orden",
+                technicalInfoTitle: "Información Técnica",
+                rappiAuthTitle: "Autenticación de Rappi",
+                clientId: "Client ID",
+                clientSecret: "Client Secret",
+                country: "País",
+                authenticate: "Autenticarse",
+                webhookUrl: "URL del Webhook del Aliado",
+                saveWebhook: "Guardar URL del Webhook",
+                webhookAuthTitle: "Autenticación del Webhook",
+                headerName: "Nombre del Header",
+                authToken: "Valor del Token",
+                saveAuth: "Guardar Autenticación",
+                logsTitle: "Logs de Actividad",
+                firestoreDataTitle: "Datos de Firestore en Tiempo Real",
+                rappiToPartner: "Órdenes Rappi -> Aliado",
+                partnerToRappi: "Órdenes Aliado -> Rappi",
+                webhookConfig: "Configuración del Webhook",
+                simulatePicking: "Simular Iniciar Picking",
+                simulateReportInvoice: "Simular Reportar Factura",
+                simulateRequestCourier: "Simular Pedir Domiciliario",
+                simulateHandshake: "Simular Iniciar Handshake",
+                simulateCourierAssigned: "Simular Asignación Domiciliario",
+                simulateOrderDelivered: "Simular Orden Entregada",
+                cancelOrder: "Cancelar Orden",
+                productTitle: "Producto",
+                productId: "ID del Producto:",
+                productName: "Nombre:",
+                productSku: "SKU:",
+                productPrice: "Precio Original:",
+                productPriceDiscount: "Precio con Descuento (opcional):",
+                productQuantity: "Cantidad:",
+                userPreferences: "Preferencias del Usuario:",
+                userPreferenceNone: "Ninguna",
+                userPreferenceRefund: "Reembolso",
+                userPreferenceShopper: "Shopper Elige",
+                userPreferenceUser: "Usuario Elige",
+                userPreferredProductId: "ID del Producto Preferido:",
+                userPreferredProductName: "Nombre del Producto Preferido:",
+                noOrders: "No hay órdenes en este estado.",
+                cancelModalTitle: "Cancelar Orden",
+                cancelReason: "Motivo de Cancelación",
+                selectReason: "Selecciona una razón",
+                cancelDetails: "JSON de Detalles",
+                cancelBtn: "Cancelar",
+                sendCancel: "Enviar Cancelación",
+                substitutionModalTitle: "Sustituir Producto",
+                substitutionProductId: "ID del Producto de Sustitución",
+                substitutionUnits: "Unidades a Sustituir",
+                substitutionWeightUnits: "Unidades de Peso (opcional)",
+                substituteBtn: "Sustituir",
+                logUserAuth: (id) => `Usuario autenticado con ID: ${id}`,
+                logAuthReady: "La autenticación no está lista. Por favor, espere.",
+                logNoProducts: "Por favor, agregue al menos un producto a la orden.",
+                logSimulatingOrder: (id, status) => `Simulando una nueva orden: ${id} (Estado: ${status})`,
+                logOrderCreated: (id) => `Orden ${id} creada en Firestore.`,
+                logError: (message) => `Error al procesar la orden: ${message}`,
+                logOrderUpdated: (id, status) => `Orden ${id} actualizada a estado: ${status}`,
+                logWebhookSent: (id, status) => `Enviando notificación de webhook para la orden ${id} con estado ${status}`,
+                logWebhookSuccess: (status) => `Webhook llamado con éxito. Estado: ${status}`,
+                logWebhookError: (status, response) => `Error en la llamada al webhook. Estado: ${status}. Respuesta: ${response}`,
+                logNoWebhook: "No se ha configurado una URL de webhook. Notificación no enviada.",
+                logRappiAuthError: "No hay un token de autenticación de Rappi. Por favor, autentíquese primero.",
+                logRappiApiCall: (url) => `Llamando al endpoint de Rappi: ${url}`,
+                logRappiCallSuccess: (endpoint) => `Llamada a Rappi exitosa para el endpoint ${endpoint}.`,
+                logRappiCallError: (status, response) => `Error al llamar a Rappi. Estado: ${status}. Respuesta: ${response}`,
+                logRappiAuthSuccess: "Autenticación exitosa. Token de acceso obtenido.",
+                logRappiAuthResponseError: "Respuesta de autenticación exitosa, pero no se encontró el token de acceso.",
+                logSavingWebhook: (url) => `URL de webhook guardada: ${url}`,
+                logWebhookSaved: "Configuración de autenticación de webhook guardada.",
+                logWebhookFieldsEmpty: "Por favor, complete los campos de autenticación del webhook.",
+                logCredentialsSaved: "Credenciales de Rappi guardadas en Firestore.",
+                logUrlUpdated: (country, url) => `URL de la API de Rappi actualizada para ${country}: ${url}`,
+                logNoCredentials: "Por favor, complete los campos de autenticación.",
+                logLoadingConfig: (type) => `Configuración de ${type} cargada desde Firestore.`,
+                logNoConfig: (type) => `No se encontró configuración de ${type}. Por favor, ingrese una URL.`,
+                logErrorLoadingConfig: (type, message) => `Error al cargar la configuración de ${type}: ${message}`,
+                logErrorParsingJson: "Error: El JSON de detalles no es válido.",
+                logSubstitutionSent: "Sustitución enviada. Por favor, simule el evento de modificación de Rappi.",
+            },
+            en: {
+                pageTitle: "Open Orders Integration Simulator",
+                pageDescription: "Tool to test communication between an orders endpoint and a webhook.",
+                userId: "User ID:",
+                createOrderTitle: "Create Order",
+                clientDataTitle: "Client Data",
+                clientName: "Client Name",
+                clientLastName: "Client Last Name",
+                clientEmail: "Client Email",
+                clientPhone: "Client Phone",
+                storeDataTitle: "Store Data",
+                storeId: "Store ID",
+                storeName: "Store Name",
+                storePhysicalId: "Physical Store ID",
+                productsTitle: "Products",
+                addProduct: "Add Product",
+                simulateOrder: "Simulate New Order",
+                technicalInfoTitle: "Technical Information",
+                rappiAuthTitle: "Rappi Authentication",
+                clientId: "Client ID",
+                clientSecret: "Client Secret",
+                country: "Country",
+                authenticate: "Authenticate",
+                webhookUrl: "Partner Webhook URL",
+                saveWebhook: "Save Webhook URL",
+                webhookAuthTitle: "Webhook Authentication",
+                headerName: "Header Name",
+                authToken: "Token Value",
+                saveAuth: "Save Authentication",
+                logsTitle: "Activity Logs",
+                firestoreDataTitle: "Real-time Firestore Data",
+                rappiToPartner: "Rappi -> Partner Orders",
+                partnerToRappi: "Partner -> Rappi Orders",
+                webhookConfig: "Webhook Configuration",
+                simulatePicking: "Simulate Start Picking",
+                simulateReportInvoice: "Simulate Report Invoice",
+                simulateRequestCourier: "Simulate Request Courier",
+                simulateHandshake: "Simulate Start Handshake",
+                simulateCourierAssigned: "Simulate Courier Assigned",
+                simulateOrderDelivered: "Simulate Order Delivered",
+                cancelOrder: "Cancel Order",
+                productTitle: "Product",
+                productId: "Product ID:",
+                productName: "Name:",
+                productSku: "SKU:",
+                productPrice: "Original Price:",
+                productPriceDiscount: "Discount Price (optional):",
+                productQuantity: "Quantity:",
+                userPreferences: "User Preferences:",
+                userPreferenceNone: "None",
+                userPreferenceRefund: "Refund",
+                userPreferenceShopper: "Shopper Chooses",
+                userPreferenceUser: "User Chooses",
+                userPreferredProductId: "Preferred Product ID:",
+                userPreferredProductName: "Preferred Product Name:",
+                noOrders: "No orders in this state.",
+                cancelModalTitle: "Cancel Order",
+                cancelReason: "Cancellation Reason",
+                selectReason: "Select a reason",
+                cancelDetails: "Details JSON",
+                cancelBtn: "Cancel",
+                sendCancel: "Send Cancellation",
+                substitutionModalTitle: "Substitute Product",
+                substitutionProductId: "Substitution Product ID",
+                substitutionUnits: "Units to Substitute",
+                substitutionWeightUnits: "Weight Units (optional)",
+                substituteBtn: "Substitute",
+                logUserAuth: (id) => `User authenticated with ID: ${id}`,
+                logAuthReady: "Authentication is not ready. Please wait.",
+                logNoProducts: "Please add at least one product to the order.",
+                logSimulatingOrder: (id, status) => `Simulating a new order: ${id} (Status: ${status})`,
+                logOrderCreated: (id) => `Order ${id} created in Firestore.`,
+                logError: (message) => `Error processing the order: ${message}`,
+                logOrderUpdated: (id, status) => `Order ${id} updated to status: ${status}`,
+                logWebhookSent: (id, status) => `Sending webhook notification for order ${id} with status ${status}`,
+                logWebhookSuccess: (status) => `Webhook called successfully. Status: ${status}`,
+                logWebhookError: (status, response) => `Webhook call failed. Status: ${status}. Response: ${response}`,
+                logNoWebhook: "No webhook URL configured. Notification not sent.",
+                logRappiAuthError: "No Rappi authentication token. Please authenticate first.",
+                logRappiApiCall: (url) => `Calling Rappi endpoint: ${url}`,
+                logRappiCallSuccess: (endpoint) => `Rappi call successful for endpoint ${endpoint}.`,
+                logRappiCallError: (status, response) => `Rappi call failed. Status: ${status}. Response: ${response}`,
+                logRappiAuthSuccess: "Authentication successful. Access token obtained.",
+                logRappiAuthResponseError: "Successful authentication response, but no access token was found.",
+                logSavingWebhook: (url) => `Webhook URL saved: ${url}`,
+                logWebhookSaved: "Webhook authentication config saved.",
+                logWebhookFieldsEmpty: "Please fill out the webhook authentication fields.",
+                logCredentialsSaved: "Rappi credentials saved to Firestore.",
+                logUrlUpdated: (country, url) => `Rappi API URL updated for ${country}: ${url}`,
+                logNoCredentials: "Please fill out the authentication fields.",
+                logLoadingConfig: (type) => `${type} configuration loaded from Firestore.`,
+                logNoConfig: (type) => `No ${type} configuration found. Please enter a URL.`,
+                logErrorLoadingConfig: (type, message) => `Error loading ${type} configuration: ${message}`,
+                logErrorParsingJson: "Error: The details JSON is not valid.",
+                logSubstitutionSent: "Substitution sent. Please simulate the Rappi modification event.",
+            },
+            pt: {
+                pageTitle: "Simulador de Integração Open Orders",
+                pageDescription: "Ferramenta para testar a comunicação entre um endpoint de pedidos e um webhook.",
+                userId: "ID do usuário:",
+                createOrderTitle: "Criar Pedido",
+                clientDataTitle: "Dados do Cliente",
+                clientName: "Nome do Cliente",
+                clientLastName: "Sobrenome do Cliente",
+                clientEmail: "Email do Cliente",
+                clientPhone: "Telefone do Cliente",
+                storeDataTitle: "Dados da Loja",
+                storeId: "ID da Loja",
+                storeName: "Nome da Loja",
+                storePhysicalId: "ID Físico da Loja",
+                productsTitle: "Produtos",
+                addProduct: "Adicionar Produto",
+                simulateOrder: "Simular Novo Pedido",
+                technicalInfoTitle: "Informação Técnica",
+                rappiAuthTitle: "Autenticação Rappi",
+                clientId: "Client ID",
+                clientSecret: "Client Secret",
+                country: "País",
+                authenticate: "Autenticar",
+                webhookUrl: "URL do Webhook do Parceiro",
+                saveWebhook: "Salvar URL do Webhook",
+                webhookAuthTitle: "Autenticação do Webhook",
+                headerName: "Nome do Cabeçalho",
+                authToken: "Valor do Token",
+                saveAuth: "Salvar Autenticação",
+                logsTitle: "Registros de Atividade",
+                firestoreDataTitle: "Dados do Firestore em Tempo Real",
+                rappiToPartner: "Pedidos Rappi -> Parceiro",
+                partnerToRappi: "Pedidos Parceiro -> Rappi",
+                webhookConfig: "Configuração do Webhook",
+                simulatePicking: "Simular Iniciar Coleta",
+                simulateReportInvoice: "Simular Relatar Fatura",
+                simulateRequestCourier: "Simular Solicitar Entregador",
+                simulateHandshake: "Simular Iniciar Handshake",
+                simulateCourierAssigned: "Simular Entregador Atribuído",
+                simulateOrderDelivered: "Simular Pedido Entregue",
+                cancelOrder: "Cancelar Pedido",
+                productTitle: "Produto",
+                productId: "ID do Produto:",
+                productName: "Nome:",
+                productSku: "SKU:",
+                productPrice: "Preço Original:",
+                productPriceDiscount: "Preço com Desconto (opcional):",
+                productQuantity: "Quantidade:",
+                userPreferences: "Preferências do Usuário:",
+                userPreferenceNone: "Nenhum",
+                userPreferenceRefund: "Reembolso",
+                userPreferenceShopper: "Shopper Escolhe",
+                userPreferenceUser: "Usuário Escolhe",
+                userPreferredProductId: "ID do Produto Preferido:",
+                userPreferredProductName: "Nome do Produto Preferido:",
+                noOrders: "Não há pedidos neste estado.",
+                cancelModalTitle: "Cancelar Pedido",
+                cancelReason: "Motivo de Cancelamento",
+                selectReason: "Selecione uma razão",
+                cancelDetails: "JSON de Detalhes",
+                cancelBtn: "Cancelar",
+                sendCancel: "Enviar Cancelamento",
+                substitutionModalTitle: "Substituir Produto",
+                substitutionProductId: "ID do Produto de Sustitución",
+                substitutionUnits: "Unidades a Substituir",
+                substitutionWeightUnits: "Unidades de Peso (opcional)",
+                substituteBtn: "Substituir",
+                logUserAuth: (id) => `Usuário autenticado com ID: ${id}`,
+                logAuthReady: "A autenticação não está pronta. Por favor, aguarde.",
+                logNoProducts: "Por favor, adicione pelo menos um produto ao pedido.",
+                logSimulatingOrder: (id, status) => `Simulando um novo pedido: ${id} (Status: ${status})`,
+                logOrderCreated: (id) => `Pedido ${id} criado no Firestore.`,
+                logError: (message) => `Erro ao processar o pedido: ${message}`,
+                logOrderUpdated: (id, status) => `Pedido ${id} atualizado para o status: ${status}`,
+                logWebhookSent: (id, status) => `Enviando notificação de webhook para o pedido ${id} com o status ${status}`,
+                logWebhookSuccess: (status) => `Webhook chamado com sucesso. Status: ${status}`,
+                logWebhookError: (status, response) => `A chamada de webhook falhou. Status: ${status}. Resposta: ${response}`,
+                logNoWebhook: "Nenhuma URL de webhook configurada. Notificação não enviada.",
+                logRappiAuthError: "Nenhum token de autenticação Rappi. Por favor, autentique-se primeiro.",
+                logRappiApiCall: (url) => `Chamando o endpoint Rappi: ${url}`,
+                logRappiCallSuccess: (endpoint) => `Chamada Rappi bem-sucedida para o endpoint ${endpoint}.`,
+                logRappiCallError: (status, response) => `A chamada Rappi falhou. Status: ${status}. Resposta: ${response}`,
+                logRappiAuthSuccess: "Autenticação bem-sucedida. Token de acesso obtido.",
+                logRappiAuthResponseError: "Resposta de autenticação bem-sucedida, mas nenhum token de acesso foi encontrado.",
+                logSavingWebhook: (url) => `URL do webhook salva: ${url}`,
+                logWebhookSaved: "Configuração de autenticação de webhook salva.",
+                logWebhookFieldsEmpty: "Por favor, preencha os campos de autenticação do webhook.",
+                logCredentialsSaved: "Credenciais Rappi salvas no Firestore.",
+                logUrlUpdated: (country, url) => `URL da API Rappi atualizada para ${country}: ${url}`,
+                logNoCredentials: "Por favor, preencha os campos de autenticação.",
+                logLoadingConfig: (type) => `Configuração de ${type} carregada do Firestore.`,
+                logNoConfig: (type) => `Nenhuma configuração de ${type} encontrada. Por favor, insira uma URL.`,
+                logErrorLoadingConfig: (type, message) => `Erro ao carregar a configuração de ${type}: ${message}`,
+                logErrorParsingJson: "Erro: O JSON de detalhes não é válido.",
+                logSubstitutionSent: "Substituição enviada. Por favor, simule o evento de modificação do Rappi.",
+            }
+        };
+
+        const updateUI = (lang) => {
+            const t = translations[lang];
+            document.title = t.pageTitle;
+
+            const elements = {
+                pageTitle: t.pageTitle,
+                pageDescription: t.pageDescription,
+                userIdText: t.userId,
+                createOrderTitle: t.createOrderTitle,
+                clientDataTitle: t.clientDataTitle,
+                clientNameLabel: t.clientName,
+                clientLastNameLabel: t.clientLastName,
+                clientEmailLabel: t.clientEmail,
+                clientPhoneLabel: t.clientPhone,
+                storeDataTitle: t.storeDataTitle,
+                storeIdLabel: t.storeId,
+                storeNameLabel: t.storeName,
+                storePhysicalIdLabel: t.storePhysicalId,
+                productsTitle: t.productsTitle,
+                addProductBtn: t.addProduct,
+                triggerOrderBtn: t.simulateOrder,
+                technicalInfoTitle: t.technicalInfoTitle,
+                rappiAuthTitle: t.rappiAuthTitle,
+                clientId: t.clientId,
+                clientSecret: t.clientSecret,
+                countryLabel: t.country,
+                authenticateBtn: t.authenticate,
+                webhookUrlLabel: t.webhookUrl,
+                saveWebhookBtn: t.saveWebhook,
+                webhookAuthTitle: t.webhookAuthTitle,
+                webhookAuthHeaderNameLabel: t.headerName,
+                webhookAuthTokenLabel: t.authToken,
+                saveAuthBtn: t.saveAuth,
+                logsTitle: t.logsTitle,
+                firestoreDataTitle: t.firestoreDataTitle,
+                cancelModalTitle: t.cancelModalTitle,
+                cancelReasonLabel: t.cancelReason,
+                selectReason: t.selectReason,
+                cancelDetails: t.cancelDetails,
+                cancelBtn: t.cancelBtn,
+                sendCancel: t.sendCancel,
+                substitutionModalTitle: t.substitutionModalTitle,
+                substitutionNewProductIdLabel: t.substitutionProductId,
+                substitutionUnitsLabel: t.substitutionUnits,
+                substitutionWeightUnitsLabel: t.substitutionWeightUnits,
+                substituteBtn: t.substituteBtn,
+            };
+
+            for (const id in elements) {
+                const el = document.getElementById(id);
+                if (el) {
+                    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                         el.placeholder = elements[id];
+                    } else if (el.tagName === 'SELECT') {
+                         // Manejo especial para el select de motivo de cancelación
+                         if (el.id === 'cancelReason') {
+                             el.options[0].textContent = t.selectReason;
+                         }
+                    } else {
+                        el.textContent = elements[id];
+                    }
+                }
+            }
+            
+            // Textos de los botones de las pestañas
+            const tabs = {
+                'open-orders-tab': t.rappiToPartner,
+                'allied-orders-tab': t.partnerToRappi,
+                'webhook-config-tab': t.webhookConfig,
+            };
+
+            for (const key in tabs) {
+                const el = document.querySelector(`button[data-target="${key}"]`);
+                if (el) el.textContent = tabs[key];
+            }
+
+            // Traducir los placeholders del formulario principal
+            document.getElementById('clientName').placeholder = t.clientName;
+            document.getElementById('clientLastName').placeholder = t.clientLastName;
+            document.getElementById('clientEmail').placeholder = t.clientEmail;
+            document.getElementById('clientPhone').placeholder = t.clientPhone;
+            document.getElementById('storeId').placeholder = t.storeId;
+            document.getElementById('storeName').placeholder = t.storeName;
+            document.getElementById('storePhysicalId').placeholder = t.storePhysicalId;
+            document.getElementById('clientId').placeholder = t.clientId;
+            document.getElementById('clientSecret').placeholder = t.clientSecret;
+            document.getElementById('webhookUrl').placeholder = t.webhookUrl;
+            document.getElementById('webhookAuthHeaderName').placeholder = t.headerName;
+            document.getElementById('webhookAuthToken').placeholder = t.authToken;
+            document.getElementById('cancelDetails').placeholder = t.cancelDetails;
+            document.getElementById('substitutionNewProductId').placeholder = t.substitutionProductId;
+            document.getElementById('substitutionUnits').placeholder = t.substitutionUnits;
+            document.getElementById('substitutionWeightUnits').placeholder = t.substitutionWeightUnits;
+            
+            // Traducir los logs existentes
+            const logs = logsContainer.querySelectorAll('.log-item');
+            logs.forEach(logEl => {
+                const logData = logEl.dataset;
+                if (logData.logKey) {
+                    let message = t[logData.logKey];
+                    if (typeof message === 'function') {
+                        const args = JSON.parse(logData.logArgs);
+                        message = message(...args);
+                    }
+                    logEl.textContent = message;
+                }
+            });
+
+            // Actualizar textos en productos dinámicos
+            const productItems = productsContainer.querySelectorAll('.product-item');
+            productItems.forEach((item, index) => {
+                const productTitle = item.querySelector('h4');
+                productTitle.textContent = `${t.productTitle} #${index + 1}`;
+                
+                const labels = {
+                    productIdLabel: t.productId,
+                    productNameLabel: t.productName,
+                    productSkuLabel: t.productSku,
+                    productPriceLabel: t.productPrice,
+                    productPriceDiscountLabel: t.productPriceDiscount,
+                    productQuantityLabel: t.productQuantity,
+                    userPreferencesLabel: t.userPreferences,
+                    userPreferredProductIdLabel: t.userPreferredProductId,
+                    userPreferredProductNameLabel: t.userPreferredProductName
+                };
+                for (const key in labels) {
+                    const el = item.querySelector(`#${key}`);
+                    if (el) el.textContent = labels[key];
+                }
+
+                // Traducir las opciones del select de preferencias
+                const userPrefSelect = item.querySelector('select[name="userPreferenceAction"]');
+                userPrefSelect.options[0].textContent = t.userPreferenceNone;
+                userPrefSelect.options[1].textContent = t.userPreferenceRefund;
+                userPrefSelect.options[2].textContent = t.userPreferenceShopper;
+                userPrefSelect.options[3].textContent = t.userPreferenceUser;
+            });
+            
+            // Traducir los botones en las órdenes
+            const allOrderContainers = [openOrdersList, alliedOrdersList];
+            allOrderContainers.forEach(container => {
+                const orders = container.querySelectorAll('.order-item');
+                orders.forEach(orderItem => {
+                    const buttonsDiv = orderItem.querySelector('.flex-wrap');
+                    if (buttonsDiv) {
+                        const newButtonsHTML = getFlowButtons(orderItem.dataset.order, orderItem.dataset.flowType);
+                        buttonsDiv.innerHTML = newButtonsHTML;
+                    }
+                });
+            });
+        };
+
+        // Escucha el cambio de idioma
+        window.addEventListener('load', () => {
+            if (langSelect) {
+                langSelect.addEventListener('change', (e) => {
+                    const selectedLang = e.target.value;
+                    updateUI(selectedLang);
+                });
+            }
+            // Agregamos el primer producto y luego actualizamos la UI
+            addProductBtn.click();
+            updateUI(langSelect.value);
+        });
+        
+        // Función para agregar un mensaje a los logs
+        const addLog = (messageKey, type = 'info', args = []) => {
+            const currentLang = langSelect.value;
+            const t = translations[currentLang];
+            let message = t[messageKey];
+            if (typeof message === 'function') {
+                message = message(...args);
+            }
+
+            const logItem = document.createElement('div');
+            logItem.className = `p-3 my-2 rounded-lg text-sm log-item ${
+                type === 'info' ? 'bg-blue-100 text-blue-800' :
+                type === 'success' ? 'bg-green-100 text-green-800' :
+                type === 'error' ? 'bg-red-100 text-red-800' :
+                'bg-gray-100 text-gray-800'
+            }`;
+            logItem.textContent = message;
+            logItem.dataset.logKey = messageKey;
+            logItem.dataset.logArgs = JSON.stringify(args);
+            logsContainer.prepend(logItem);
+        };
+
+        // Escucha el estado de autenticación
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                addLog('logUserAuth', 'success', [userId]);
+                userIdDisplay.textContent = `${translations[langSelect.value].userId} ${userId}`;
+                isAuthReady = true;
+
+                loadConfigs();
+                setupFirestoreListeners();
+            } else {
+                try {
+                    addLog('logUserAuth', 'info');
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    addLog('logError', 'error', ['Error al iniciar sesión: ' + error.message]);
+                }
+            }
+        });
+
+        const loadConfigs = async () => {
+            loadWebhookConfig();
+            loadRappiConfig();
+        };
+
+        // Cargar configuración del webhook desde Firestore
+        const loadWebhookConfig = async () => {
+            try {
+                const docSnap = await getDoc(webhookConfigDocRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    webhookUrlInput.value = data.url || '';
+                    webhookAuthHeaderName = data.authHeaderName || '';
+                    webhookAuthToken = data.authToken || '';
+                    webhookAuthHeaderNameInput.value = data.authHeaderName || '';
+                    webhookAuthTokenInput.value = data.authToken || '';
+                    addLog('logLoadingConfig', 'info', ['webhook']);
+                } else {
+                    addLog('logNoConfig', 'info', ['webhook']);
+                }
+            } catch (error) {
+                addLog('logErrorLoadingConfig', 'error', ['webhook', error.message]);
+            }
+        };
+
+        // Cargar configuración de Rappi desde Firestore
+        const loadRappiConfig = async () => {
+             try {
+                const docSnap = await getDoc(rappiConfigDocRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    document.getElementById('clientId').value = data.client_id || '';
+                    document.getElementById('clientSecret').value = data.client_secret || '';
+                    document.getElementById('countrySelect').value = data.country || 'COL';
+                    rappiApiUrl = countryUrls[data.country] || rappiApiUrl;
+                    addLog('logLoadingConfig', 'info', ['Rappi']);
+                } else {
+                    addLog('logNoConfig', 'info', ['Rappi']);
+                }
+            } catch (error) {
+                addLog('logErrorLoadingConfig', 'error', ['Rappi', error.message]);
+            }
+        };
+        
+        // Guardar la URL del webhook en Firestore
+        webhookForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const webhookUrl = webhookUrlInput.value.trim();
+            if (isAuthReady && webhookUrl) {
+                try {
+                    await setDoc(webhookConfigDocRef, {
+                        url: webhookUrl,
+                        updatedAt: serverTimestamp(),
+                        userId: userId
+                    });
+                    addLog('logSavingWebhook', 'success', [webhookUrl]);
+                } catch (error) {
+                    addLog('logError', 'error', ['Error al guardar la URL del webhook: ' + error.message]);
+                }
+            }
+        });
+
+        // Guardar la configuración de autenticación del webhook
+        webhookAuthForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const headerName = webhookAuthHeaderNameInput.value.trim();
+            const tokenValue = webhookAuthTokenInput.value.trim();
+
+            if (isAuthReady && headerName && tokenValue) {
+                try {
+                    await updateDoc(webhookConfigDocRef, {
+                        authHeaderName: headerName,
+                        authToken: tokenValue
+                    });
+                    webhookAuthHeaderName = headerName;
+                    webhookAuthToken = tokenValue;
+                    addLog('logWebhookSaved', 'success');
+                } catch (error) {
+                    addLog('logError', 'error', ['Error al guardar la autenticación del webhook: ' + error.message]);
+                }
+            } else {
+                addLog('logWebhookFieldsEmpty', 'error');
+            }
+        });
+
+        // Manejar el formulario de autenticación de Rappi
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const clientId = document.getElementById('clientId').value;
+            const clientSecret = document.getElementById('clientSecret').value;
+            const country = document.getElementById('countrySelect').value;
+
+            if (isAuthReady && clientId && clientSecret) {
+                try {
+                    await setDoc(rappiConfigDocRef, {
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        country: country,
+                        updatedAt: serverTimestamp(),
+                        userId: userId
+                    });
+                    addLog('logCredentialsSaved', 'success');
+                    
+                    rappiApiUrl = countryUrls[country];
+                    addLog('logUrlUpdated', 'info', [country, rappiApiUrl]);
+
+                    // Simular la llamada a la API de autenticación
+                    addLog('Realizando llamada a la API de autenticación de Rappi...', 'info');
+                    const authResponse = await fetch(`${rappiApiUrl}/api/open-api/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ client_id: clientId, client_secret: clientSecret })
+                    });
+
+                    if (authResponse.ok) {
+                        const data = await authResponse.json();
+                        if (data.access_token && data.token_type) {
+                            rappiAccessToken = `${data.token_type} ${data.access_token}`;
+                            addLog('logRappiAuthSuccess', 'success');
+                        } else {
+                             addLog('logRappiAuthResponseError', 'error');
+                        }
+                    } else {
+                        addLog('logRappiCallError', 'error', [authResponse.status, await authResponse.text()]);
+                    }
+
+                } catch (error) {
+                    addLog('logError', 'error', ['Error al autenticar: ' + error.message]);
+                }
+            } else {
+                addLog('logNoCredentials', 'error');
+            }
+        });
+
+        // Añadir un nuevo campo de producto
+        addProductBtn.addEventListener('click', () => {
+            const productCount = productsContainer.children.length;
+            const productDiv = document.createElement('div');
+            productDiv.className = 'product-item p-4 border border-gray-300 rounded-lg space-y-2 relative';
+            const currentLang = document.getElementById('langSelect').value;
+            const t = translations[currentLang];
+            productDiv.innerHTML = `
+                <button type="button" class="remove-product-btn absolute top-2 right-2 text-rappi-text hover:text-rappi-text font-bold">&times;</button>
+                <h4 class="font-semibold text-gray-700">${t.productTitle} #${productCount + 1}</h4>
+                <div>
+                    <label class="block text-xs text-gray-600">${t.productId}</label>
+                    <input type="text" name="productId" placeholder="${t.productId}" required class="w-full px-2 py-1 border rounded-md text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-600">${t.productName}</label>
+                    <input type="text" name="productName" placeholder="${t.productName}" required class="w-full px-2 py-1 border rounded-md text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-600">${t.productSku}</label>
+                    <input type="text" name="productSku" placeholder="${t.productSku}" required class="w-full px-2 py-1 border rounded-md text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-600">${t.productPrice}</label>
+                    <input type="number" name="productPrice" placeholder="${t.productPrice}" required class="w-full px-2 py-1 border rounded-md text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-600">${t.productPriceDiscount}</label>
+                    <input type="number" name="productPriceDiscount" placeholder="${t.productPriceDiscount}" class="w-full px-2 py-1 border rounded-md text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-600">${t.productQuantity}</label>
+                    <input type="number" name="productQuantity" value="1" min="1" required class="w-full px-2 py-1 border rounded-md text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-600">${t.userPreferences}</label>
+                    <select name="userPreferenceAction" class="w-full px-2 py-1 border rounded-md text-sm">
+                        <option value="">${t.userPreferenceNone}</option>
+                        <option value="refund">${t.userPreferenceRefund}</option>
+                        <option value="shopper_chooses">${t.userPreferenceShopper}</option>
+                        <option value="user_chooses">${t.userPreferenceUser}</option>
+                    </select>
+                </div>
+                <div class="user-chooses-fields space-y-2 hidden">
+                    <div>
+                        <label class="block text-xs text-gray-600">${t.userPreferredProductId}</label>
+                        <input type="text" name="userPreferredProductId" placeholder="${t.userPreferredProductId}" class="w-full px-2 py-1 border rounded-md text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-600">${t.userPreferredProductName}</label>
+                        <input type="text" name="userPreferredProductName" placeholder="${t.userPreferredProductName}" class="w-full px-2 py-1 border rounded-md text-sm">
+                    </div>
+                </div>
+            `;
+            productsContainer.appendChild(productDiv);
+        });
+
+        // Manejar la visibilidad de los campos de preferencia
+        productsContainer.addEventListener('change', (e) => {
+            if (e.target.name === 'userPreferenceAction') {
+                const parentDiv = e.target.closest('.product-item');
+                const userChoosesFields = parentDiv.querySelector('.user-chooses-fields');
+                if (e.target.value === 'user_chooses') {
+                    userChoosesFields.classList.remove('hidden');
+                } else {
+                    userChoosesFields.classList.add('hidden');
+                }
+            }
+        });
+
+        // Eliminar producto
+        productsContainer.addEventListener('click', (e) => {
+            if (e.target.classList.contains('remove-product-btn')) {
+                e.target.closest('.product-item').remove();
+            }
+        });
+
+        // Manejar el formulario de creación de orden
+        createOrderForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!isAuthReady) {
+                addLog('logAuthReady', 'error');
+                return;
+            }
+
+            const formData = new FormData(createOrderForm);
+            const products = [];
+            let totalPrice = 0;
+
+            const productItems = productsContainer.querySelectorAll('.product-item');
+            if (productItems.length === 0) {
+                addLog('logNoProducts', 'error');
+                return;
+            }
+
+            productItems.forEach(item => {
+                const productId = item.querySelector('[name="productId"]').value;
+                const productName = item.querySelector('[name="productName"]').value;
+                const productSku = item.querySelector('[name="productSku"]').value;
+                const productPrice = parseFloat(item.querySelector('[name="productPrice"]').value) || 0;
+                const productPriceDiscount = parseFloat(item.querySelector('[name="productPriceDiscount"]').value) || null;
+                const productQuantity = parseInt(item.querySelector('[name="productQuantity"]').value) || 1;
+                const userPreferenceAction = item.querySelector('[name="userPreferenceAction"]').value;
+
+                const priceToUse = productPriceDiscount !== null ? productPriceDiscount : productPrice;
+
+                const product = {
+                    "id": productId,
+                    "ean": "",
+                    "sku": productSku,
+                    "name": productName,
+                    "price": productPrice,
+                    "quantity": { "type": "units", "units": productQuantity },
+                    "volumetry": { "size": 0, "heavy": false, "weight": 0, "fragile": false, "weight_unit": "" },
+                    "unit_price": productPrice,
+                    "description": "",
+                    "price_with_discount": productPriceDiscount
+                };
+
+                if (userPreferenceAction) {
+                    const userPreference = { "action": userPreferenceAction };
+                    if (userPreferenceAction === 'user_chooses') {
+                        const preferredProductId = item.querySelector('[name="userPreferredProductId"]').value;
+                        const preferredProductName = item.querySelector('[name="userPreferredProductName"]').value;
+                        userPreference.preferred_product = {
+                            "id": preferredProductId,
+                            "name": preferredProductName
+                        };
+                    }
+                    product.user_preference = userPreference;
+                }
+                
+                products.push(product);
+                totalPrice += priceToUse * productQuantity;
+            });
+            
+            const combos = []; 
+
+            const orderId = `order_${Date.now()}`;
+            const clientName = formData.get('clientName');
+            const clientLastName = formData.get('clientLastName');
+            const clientEmail = formData.get('clientEmail');
+            const clientPhone = formData.get('clientPhone');
+
+            const storeId = formData.get('storeId');
+            const storeName = formData.get('storeName');
+            const storePhysicalId = formData.get('storePhysicalId');
+
+            const orderData = {
+                "id": parseInt(orderId.replace('order_', '')),
+                "store": { 
+                    "id": storeId ? parseInt(storeId) : '', 
+                    "name": storeName || '', 
+                    "physical_store_id": storePhysicalId ? parseInt(storePhysicalId) : ''
+                },
+                "client": {
+                    "email": clientEmail || '',
+                    "phone": clientPhone || '',
+                    "last_name": clientLastName || '',
+                    "first_name": clientName || '',
+                    "fidelity_id": "",
+                    "identification": { "type": "", "number": "" }
+                },
+                "combos": combos,
+                "status": "created",
+                "address": { "city": "Bogotá, D.C.", "number": "", "region": "Bogotá, D.C.", "latitude": 4.657975, "zip_code": "111221", "longitude": -74.0755719, "street_address": "Calle 64 # 28 - 70" },
+                "courier": { "phone": "", "last_name": "", "first_name": "", "vehicle_type": "" },
+                "place_at": new Date().toISOString(),
+                "products": products,
+                "created_at": new Date().toISOString(),
+                "event_uuid": "9290be0f-071c-4ac5-b058-edec44da3f15",
+                "total_price": totalPrice,
+                "delivered_at": "",
+                "payment_method": "cash",
+                "cancelation_info": { "canceled_by": "", "description": "" },
+                userId: userId, 
+                orderId: orderId
+            };
+
+            addLog('logSimulatingOrder', 'info', [orderData.id, orderData.status]);
+
+            try {
+                await setDoc(doc(ordersCollectionRef, orderId), orderData);
+                addLog('logOrderCreated', 'success', [orderId]);
+
+                await triggerWebhook(orderData);
+            } catch (error) {
+                addLog('logError', 'error', ['Error al procesar la orden: ' + error.message]);
+            }
+        });
+        
+        // Función para cambiar el estado de la orden (simulando los pasos del aliado)
+        const updateOrderStatus = async (orderId, newStatus, flow, event_uuid, courierData = {}, newProducts = []) => {
+            if (!isAuthReady) {
+                addLog('logAuthReady', 'error');
+                return;
+            }
+
+            try {
+                const orderDocRef = doc(ordersCollectionRef, orderId);
+                const updateData = {
+                    status: newStatus,
+                    flow: flow,
+                    timestamp: serverTimestamp(),
+                    event_uuid: event_uuid || crypto.randomUUID(),
+                };
+
+                // Si se proporciona información del domiciliario, actualizar el objeto courier
+                if (Object.keys(courierData).length > 0) {
+                    updateData.courier = courierData;
+                }
+                
+                // Si se proporcionan nuevos productos, actualizar el array de productos y el total
+                if (newProducts.length > 0) {
+                     updateData.products = newProducts;
+                     let newTotalPrice = 0;
+                     newProducts.forEach(p => {
+                         const price = p.price_with_discount !== null ? p.price_with_discount : p.price;
+                         newTotalPrice += price * (p.quantity.units || 1);
+                     });
+                     updateData.total_price = newTotalPrice;
+                }
+
+                await updateDoc(orderDocRef, updateData);
+                addLog('logOrderUpdated', 'success', [orderId, newStatus]);
+
+                // Enviar notificación de webhook si el cambio de estado es iniciado por Rappi
+                if (flow === 'rappi-to-partner') {
+                    const docSnap = await getDoc(orderDocRef);
+                    if (docSnap.exists()) {
+                        await triggerWebhook(docSnap.data());
+                    }
+                }
+            } catch (error) {
+                addLog('logError', 'error', ['Error al procesar la orden: ' + error.message]);
+            }
+        };
+
+        const triggerWebhook = async (orderData) => {
+            const docSnap = await getDoc(webhookConfigDocRef);
+            if (docSnap.exists() && docSnap.data().url) {
+                const webhookUrl = docSnap.data().url;
+                const headers = { 'Content-Type': 'application/json' };
+                if (docSnap.data().authHeaderName && docSnap.data().authToken) {
+                    headers[docSnap.data().authHeaderName] = docSnap.data().authToken;
+                }
+
+                addLog('logWebhookSent', 'info', [orderData.id, orderData.status]);
+
+                try {
+                    const response = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(orderData)
+                    });
+
+                    if (response.ok) {
+                        addLog('logWebhookSuccess', 'success', [response.status]);
+                    } else {
+                        addLog('logWebhookError', 'error', [response.status, await response.text()]);
+                    }
+                } catch (fetchError) {
+                    addLog('Error de red al llamar al webhook: ' + fetchError.message, 'error');
+                }
+            } else {
+                addLog('logNoWebhook', 'info');
+            }
+        };
+
+        // Lógica de cancelación
+        window.openCancelModal = (rappiOrderId, eventUuid) => {
+            cancelForm.dataset.rappiOrderId = rappiOrderId;
+            cancelForm.dataset.eventUuid = eventUuid;
+            cancelDetailsInput.required = false;
+            cancelModal.classList.remove('hidden');
+        };
+
+        window.closeCancelModal = () => {
+            cancelModal.classList.add('hidden');
+        };
+
+        cancelReasonSelect.addEventListener('change', (e) => {
+            const reason = e.target.value;
+            const currentLang = document.getElementById('langSelect').value;
+            if (reasonsWithDetails.includes(reason)) {
+                cancelDetailsInput.required = true;
+                cancelDetailsInput.placeholder = translations[currentLang].cancelDetails + ' Ej: {"products": ["0001"]}';
+            } else {
+                cancelDetailsInput.required = false;
+                cancelDetailsInput.placeholder = translations[currentLang].cancelDetails + ' (Este motivo no requiere detalles)';
+            }
+        });
+
+        cancelForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const rappiOrderId = cancelForm.dataset.rappiOrderId;
+            const eventUuid = cancelForm.dataset.eventUuid;
+            const cancelType = cancelReasonSelect.value;
+            const cancelDetails = cancelDetailsInput.value;
+
+            let body = { type: cancelType, details: {} };
+
+            if (reasonsWithDetails.includes(cancelType)) {
+                try {
+                    body.details = JSON.parse(cancelDetails);
+                } catch (error) {
+                    addLog('logErrorParsingJson', 'error');
+                    return;
+                }
+            }
+
+            closeCancelModal();
+            await callRappiEndpoint(rappiOrderId, 'cancel', eventUuid, body);
+        });
+        
+        // Lógica de sustitución
+        window.openSubstitutionModal = (rappiOrderId, eventUuid, originalProductId) => {
+            substitutionForm.dataset.rappiOrderId = rappiOrderId;
+            substitutionForm.dataset.eventUuid = eventUuid;
+            substitutionOriginalProductIdInput.value = originalProductId;
+            substitutionModal.classList.remove('hidden');
+        };
+
+        window.closeSubstitutionModal = () => {
+            substitutionModal.classList.add('hidden');
+        };
+
+        substitutionForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const rappiOrderId = substitutionForm.dataset.rappiOrderId;
+            const eventUuid = substitutionForm.dataset.eventUuid;
+            const originalProductId = substitutionOriginalProductIdInput.value;
+            const newProductId = document.getElementById('substitutionNewProductId').value;
+            const newProductUnits = document.getElementById('substitutionUnits').value;
+            const newProductWeightUnits = document.getElementById('substitutionWeightUnits').value;
+
+            const body = {
+                id: newProductId,
+                units: parseInt(newProductUnits) || null,
+                weight_units: newProductWeightUnits ? parseInt(newProductWeightUnits) : null
+            };
+
+            closeSubstitutionModal();
+            await callRappiEndpoint(rappiOrderId, `products/${originalProductId}/substitution`, eventUuid, body);
+        });
+
+        // Escucha de datos en tiempo real de Firestore
+        const setupFirestoreListeners = () => {
+            // Escucha de la colección de órdenes
+            onSnapshot(ordersCollectionRef, (snapshot) => {
+                const allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                const openOrders = allOrders.filter(o => ['created', 'invoice_reported'].includes(o.status));
+                const alliedOrders = allOrders.filter(o => ['started_picking', 'finished', 'canceled', 'assigned_courier'].includes(o.status));
+
+                displayOrders(openOrders, openOrdersList, 'rappi-to-partner');
+                displayOrders(alliedOrders, alliedOrdersList, 'partner-to-rappi');
+            }, (error) => {
+                addLog('logError', 'error', ['Error de escucha de Firestore: ' + error.message]);
+            });
+
+            // Escucha del documento de configuración del webhook
+            onSnapshot(webhookConfigDocRef, (docSnap) => {
+                const webhookData = docSnap.exists() ? docSnap.data() : null;
+                displayWebhookConfig(webhookData);
+            }, (error) => {
+                addLog('logError', 'error', ['Error de escucha de Firestore (Webhook): ' + error.message]);
+            });
+        };
+
+        // Función para mostrar los datos de las órdenes
+        const displayOrders = (orders, container, flowType) => {
+            container.innerHTML = '';
+            const t = translations[langSelect.value];
+            if (orders.length > 0) {
+                orders.forEach(order => {
+                    const orderItem = document.createElement('div');
+                    orderItem.className = 'p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-2 order-item';
+                    orderItem.dataset.order = JSON.stringify(order);
+                    orderItem.dataset.flowType = flowType;
+                    orderItem.innerHTML = `
+                        <div class="flex justify-between items-center">
+                            <span class="font-semibold text-gray-800">Orden ID: ${order.id}</span>
+                            <span class="px-2 py-1 text-xs font-medium rounded-full ${
+                                order.status === 'created' ? 'bg-blue-200 text-blue-800' :
+                                order.status === 'started_picking' ? 'bg-indigo-200 text-indigo-800' :
+                                order.status === 'assigned_courier' ? 'bg-purple-200 text-purple-800' :
+                                order.status === 'finished' ? 'bg-green-200 text-green-800' :
+                                order.status === 'canceled' ? 'bg-red-200 text-red-800' :
+                                'bg-gray-200 text-gray-800'
+                            }">${order.status}</span>
+                        </div>
+                        <pre class="whitespace-pre-wrap text-xs font-mono text-gray-700">${JSON.stringify(order, null, 2)}</pre>
+                        <div class="flex flex-wrap gap-2 mt-2">
+                            ${getFlowButtons(order, flowType)}
+                        </div>
+                    `;
+                    container.appendChild(orderItem);
+                });
+            } else {
+                container.innerHTML = `<p class="text-gray-500 p-4">${t.noOrders}</p>`;
+            }
+        };
+
+        const getFlowButtons = (order, flowType) => {
+            const rappiOrderId = order.id;
+            const orderId = order.orderId;
+            const eventUuid = order.event_uuid;
+            const status = order.status;
+            const t = translations[langSelect.value];
+            let buttons = '';
+            if (flowType === 'partner-to-rappi') {
+                if (status === 'created') {
+                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'start_picking', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulatePicking}</button>`;
+                }
+                if (status === 'created' || status === 'started_picking') {
+                    buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'report_invoice', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateReportInvoice}</button>`;
+                }
+                if (status === 'invoice_reported') {
+                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'request__courier', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateRequestCourier}</button>`;
+                }
+                if (status === 'invoice_reported' || status === 'assigned_courier') {
+                    buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'handshake', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateHandshake}</button>`;
+                }
+                if (status === 'created' || status === 'started_picking') {
+                    order.products.forEach(product => {
+                         buttons += `<button onclick="openSubstitutionModal('${rappiOrderId}', '${eventUuid}', '${product.id}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.substituteBtn}: ${product.name}</button>`;
+                    });
+                }
+                if (status === 'created' || status === 'started_picking') {
+                    buttons += `<button onclick="openCancelModal('${rappiOrderId}', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-red-500 hover:bg-red-600 transition">${t.cancelOrder}</button>`;
+                }
+            } else if (flowType === 'rappi-to-partner') {
+                if (status === 'created') {
+                     buttons += `<button onclick="updateOrderStatusFromUI('order_${rappiOrderId}', 'courier_assigned', 'rappi-to-partner')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-blue-500 hover:bg-blue-600 transition">${t.simulateCourierAssigned}</button>`;
+                }
+                if (status === 'invoice_reported') {
+                     buttons += `<button onclick="updateOrderStatusFromUI('order_${rappiOrderId}', 'finished', 'rappi-to-partner')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-green-500 hover:bg-green-600 transition">${t.simulateOrderDelivered}</button>`;
+                }
+            }
+            return buttons;
+        };
+        
+        window.callRappiEndpoint = async (rappiOrderId, endpoint, eventUuid, body = {}) => {
+            if (!rappiAccessToken) {
+                addLog('logRappiAuthError', 'error');
+                return;
+            }
+
+            const endpointUrl = `${rappiApiUrl}/api/open-api/v1/orders/${rappiOrderId}/${endpoint}`;
+            addLog('logRappiApiCall', 'info', [endpointUrl]);
+
+            const headers = { 
+                'Content-Type': 'application/json',
+                'Authorization': rappiAccessToken,
+                'event_uuid': eventUuid
+            };
+            
+            let requestBody = {};
+            
+            if (endpoint.includes('start_picking')) {
+                 requestBody = { picking_time: 15 };
+            } else if (endpoint.includes('report_invoice')) {
+                requestBody = { total_price: 100, image_url: "https://example.com/invoice.jpg" };
+            } else if (endpoint.includes('request__courier')) {
+                requestBody = { store_id: 12345, vehicle_type: "car" };
+            } else if (endpoint.includes('cancel')) {
+                requestBody = body;
+            } else {
+                 requestBody = body;
+            }
+            
+            try {
+                const response = await fetch(endpointUrl, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (response.ok) {
+                    addLog('logRappiCallSuccess', 'success', [endpoint]);
+                     if (endpoint.includes('report_invoice')) {
+                        const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
+                        await updateOrderStatus(`order_${rappiOrderId}`, 'invoice_reported', 'partner-to-rappi', newEventUuid);
+                    } else if (endpoint.includes('cancel')) {
+                        const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
+                        await updateOrderStatus(`order_${rappiOrderId}`, 'canceled', 'partner-to-rappi', newEventUuid);
+                    } else if (endpoint.includes('substitution')) {
+                        addLog('logSubstitutionSent', 'info');
+                    }
+
+                } else {
+                    addLog('logRappiCallError', 'error', [response.status, await response.text()]);
+                    
+                }
+            } catch (fetchError) {
+                addLog('Error de red al llamar al webhook: ' + fetchError.message, 'error');
+            }
+        };
+        
+        window.updateOrderStatusFromUI = async (orderId, newStatus, flow, newProducts = []) => {
+             const docSnap = await getDoc(doc(ordersCollectionRef, orderId));
+             if (docSnap.exists()) {
+                 const orderData = docSnap.data();
+                 const event_uuid = crypto.randomUUID();
+                 let finalStatus = orderData.status;
+                 
+                 if (newStatus === 'courier_assigned') {
+                     finalStatus = orderData.status;
+                 }
+                 if (newStatus === 'finished') {
+                     finalStatus = ['invoice_reported', 'assigned_courier'].includes(orderData.status) ? 'finished' : orderData.status;
+                     
+                 }
+                 
+                 const courierData = newStatus === 'courier_assigned' ? { phone: '18003334444', last_name: 'Johnson', first_name: 'Jane', vehicle_type: 'motorbike' } : orderData.courier;
+
+                 await updateOrderStatus(orderId, finalStatus, flow, event_uuid, courierData, newProducts);
+             }
+        };
+
+        const displayWebhookConfig = (data) => {
+            const container = document.getElementById('webhookConfigDisplay');
+            const t = translations[langSelect.value];
+            if (data) {
+                container.innerHTML = `<pre class="whitespace-pre-wrap text-sm font-mono text-gray-700">${JSON.stringify(data, null, 2)}</pre>`;
+            } else {
+                container.innerHTML = `<p class="text-gray-500">${t.noOrders}</p>`;
+            }
+        };
+
+        // Gestión de pestañas
+        const tabs = document.querySelectorAll('.tab-button');
+        const contents = document.querySelectorAll('.tab-content');
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => t.classList.remove('border-rappi-primary', 'text-rappi-primary'));
+                tabs.forEach(t => t.classList.add('border-transparent', 'text-gray-500'));
+                contents.forEach(c => c.classList.add('hidden'));
+
+                tab.classList.remove('border-transparent', 'text-gray-500');
+                tab.classList.add('border-rappi-primary', 'text-rappi-primary');
+                
+                const target = document.getElementById(tab.dataset.target);
+                target.classList.remove('hidden');
+            });
+        });
+
+    </script>
+    <style>
+        .title-font {
+            font-family: 'Montserrat', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-[#f6553f] font-sans antialiased text-[#4c2c24] p-4">
+
+    <div class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-4xl space-y-8">
+            <header class="text-center">
+                <div class="flex items-center justify-center space-x-4 mb-4">
+                    <h1 id="pageTitle" class="text-4xl font-extrabold text-[#fa3d22] title-font">Simulador Integración Open Orders</h1>
+                    <select id="langSelect" class="bg-gray-200 text-gray-700 rounded-lg text-sm px-2 py-1">
+                        <option value="es">Español</option>
+                        <option value="en">English</option>
+                        <option value="pt">Português</option>
+                    </select>
+                </div>
+                <p id="pageDescription" class="text-[#4c2c24]">Herramienta para probar la comunicación entre un endpoint de pedidos y un webhook.</p>
+                <p id="userIdDisplay" class="text-sm font-semibold text-[#4c2c24] mt-2"></p>
+            </header>
+            
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- Panel de creación de la orden -->
+                <section class="bg-gray-50 p-6 rounded-2xl shadow-inner space-y-6">
+                    <h2 id="createOrderTitle" class="text-2xl font-bold text-[#4c2c24]">Crear Orden</h2>
+
+                    <!-- Formulario para crear la orden -->
+                    <form id="createOrderForm" class="space-y-4">
+                        <h3 id="clientDataTitle" class="text-xl font-semibold text-[#4c2c24]">Datos del Cliente</h3>
+                        <div>
+                            <label for="clientName" id="clientNameLabel" class="block text-sm font-medium text-gray-700">Nombre del Cliente</label>
+                            <input type="text" id="clientName" name="clientName" placeholder="Nombre del Cliente" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label for="clientLastName" id="clientLastNameLabel" class="block text-sm font-medium text-gray-700">Apellido del Cliente</label>
+                            <input type="text" id="clientLastName" name="clientLastName" placeholder="Apellido del Cliente" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label for="clientEmail" id="clientEmailLabel" class="block text-sm font-medium text-gray-700">Email del Cliente</label>
+                            <input type="email" id="clientEmail" name="clientEmail" placeholder="Email del Cliente" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                         <div>
+                            <label for="clientPhone" id="clientPhoneLabel" class="block text-sm font-medium text-gray-700">Teléfono del Cliente</label>
+                            <input type="text" id="clientPhone" name="clientPhone" placeholder="Teléfono del Cliente" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+
+                        <hr class="border-gray-300 my-4">
+
+                        <h3 id="storeDataTitle" class="text-xl font-semibold text-[#4c2c24]">Datos de la Tienda</h3>
+                        <div>
+                            <label for="storeId" id="storeIdLabel" class="block text-sm font-medium text-gray-700">ID de la Tienda</label>
+                            <input type="number" id="storeId" name="storeId" placeholder="ID de la Tienda" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label for="storeName" id="storeNameLabel" class="block text-sm font-medium text-gray-700">Nombre de la Tienda</label>
+                            <input type="text" id="storeName" name="storeName" placeholder="Nombre de la Tienda" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label for="storePhysicalId" id="storePhysicalIdLabel" class="block text-sm font-medium text-gray-700">ID Físico de la Tienda</label>
+                            <input type="number" id="storePhysicalId" name="storePhysicalId" placeholder="ID Físico de la Tienda" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+
+                        <hr class="border-gray-300 my-4">
+
+                        <h4 id="productsTitle" class="text-lg font-semibold text-[#4c2c24]">Productos</h4>
+                        <div id="productsContainer" class="space-y-4">
+                            <!-- Los productos se añadirán aquí dinámicamente -->
+                        </div>
+                        <button type="button" id="addProductBtn" class="w-full bg-gray-200 text-gray-700 py-2 px-4 rounded-lg shadow-md hover:bg-gray-300 transition duration-300 ease-in-out">
+                            Añadir Producto
+                        </button>
+
+                        <button type="submit" id="triggerOrderBtn"
+                                class="w-full bg-[#fa3d22] text-white py-2 px-4 rounded-lg shadow-md hover:bg-[#c81c20] transition duration-300 ease-in-out mt-4">
+                                Simular Nueva Orden
+                        </button>
+                    </form>
+                </section>
+                
+                <!-- Panel de información técnica -->
+                <section class="bg-gray-50 p-6 rounded-2xl shadow-inner space-y-6">
+                    <h2 id="technicalInfoTitle" class="text-2xl font-bold text-[#4c2c24]">Información Técnica</h2>
+                    
+                    <!-- Formulario de autenticación -->
+                    <form id="authForm" class="space-y-4">
+                        <h3 id="rappiAuthTitle" class="text-xl font-semibold text-[#4c2c24]">Autenticación de Rappi</h3>
+                        <div>
+                            <label for="clientId" id="clientIdLabel" class="block text-sm font-medium text-gray-700">Client ID</label>
+                            <input type="text" id="clientId" name="clientId" placeholder="Tu Client ID" required
+                                class="block w-full px-4 py-2 border rounded-lg shadow-sm text-sm">
+                        </div>
+                        <div>
+                            <label for="clientSecret" id="clientSecretLabel" class="block text-sm font-medium text-gray-700">Client Secret</label>
+                            <input type="password" id="clientSecret" name="clientSecret" placeholder="Tu Client Secret" required
+                                class="block w-full px-4 py-2 border rounded-lg shadow-sm text-sm">
+                        </div>
+                        <div>
+                            <label for="countrySelect" id="countryLabel" class="block text-sm font-medium text-gray-700">País</label>
+                            <select id="countrySelect" name="country" class="block w-full px-4 py-2 border rounded-lg shadow-sm text-sm">
+                                <option value="ARG">Argentina</option>
+                                <option value="BRA">Brasil</option>
+                                <option value="CHL">Chile</option>
+                                <option value="COL">Colombia</option>
+                                <option value="CRI">Costa Rica</option>
+                                <option value="ECU">Ecuador</option>
+                                <option value="MEX">México</option>
+                                <option value="PER">Perú</option>
+                                <option value="URY">Uruguay</option>
+                            </select>
+                        </div>
+                        <button type="submit" id="authenticateBtn"
+                                class="w-full bg-[#fa3d22] text-white py-2 px-4 rounded-lg shadow-md hover:bg-[#c81c20] transition duration-300 ease-in-out">
+                                Autenticarse
+                        </button>
+                    </form>
+
+                    <form id="webhookForm" class="space-y-4">
+                        <label for="webhookUrl" id="webhookUrlLabel" class="block text-sm font-medium text-gray-700">URL del Webhook del Aliado</label>
+                        <input type="url" id="webhookUrl" name="webhookUrl" placeholder="Ej: https://tudominio.com/webhook" required
+                               class="block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-[#fa3d22] focus:border-[#fa3d22]">
+                        <button type="submit" id="saveWebhookBtn"
+                                class="w-full bg-[#fa3d22] text-white py-2 px-4 rounded-lg shadow-md hover:bg-[#c81c20] transition duration-300 ease-in-out">
+                                Guardar URL del Webhook
+                        </button>
+                    </form>
+                    
+                     <form id="webhookAuthForm" class="space-y-4">
+                        <h3 id="webhookAuthTitle" class="text-xl font-semibold text-[#4c2c24]">Autenticación del Webhook</h3>
+                        <div>
+                            <label for="webhookAuthHeaderName" id="webhookAuthHeaderNameLabel" class="block text-sm font-medium text-gray-700">Nombre del Header</label>
+                            <input type="text" id="webhookAuthHeaderName" name="webhookAuthHeaderName" placeholder="Ej: Authorization" class="block w-full px-4 py-2 border rounded-lg shadow-sm text-sm">
+                        </div>
+                        <div>
+                            <label for="webhookAuthToken" id="webhookAuthTokenLabel" class="block text-sm font-medium text-gray-700">Valor del Token</label>
+                            <input type="text" id="webhookAuthToken" name="webhookAuthToken" placeholder="Ej: Bearer YOUR_TOKEN" class="block w-full px-4 py-2 border rounded-lg shadow-sm text-sm">
+                        </div>
+                         <button type="submit" id="saveAuthBtn" class="w-full bg-[#fa3d22] text-white py-2 px-4 rounded-lg shadow-md hover:bg-[#c81c20] transition duration-300 ease-in-out">
+                            Guardar Autenticación
+                        </button>
+                    </form>
+
+                    <h3 id="logsTitle" class="text-xl font-semibold text-[#4c2c24]">Logs de Actividad</h3>
+                    <div id="logsContainer" class="max-h-96 overflow-y-auto space-y-2">
+                        <!-- Los logs se insertarán aquí dinámicamente -->
+                    </div>
+                </section>
+            </div>
+            
+            <!-- Panel de datos de Firestore -->
+            <section class="space-y-6" id="firestoreDataContainer">
+                <h2 id="firestoreDataTitle" class="text-2xl font-bold text-[#4c2c24] mb-4">Datos de Firestore en Tiempo Real</h2>
+                
+                <!-- Tabs para los diferentes flujos -->
+                <div class="flex justify-center border-b border-gray-200 mb-4">
+                    <button class="tab-button px-4 py-2 font-medium text-sm text-[#fa3d22] border-b-2 border-[#fa3d22] focus:outline-none" data-target="open-orders-tab">Órdenes Rappi -> Aliado</button>
+                    <button class="tab-button px-4 py-2 font-medium text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-700 hover:border-gray-300 focus:outline-none" data-target="allied-orders-tab">Órdenes Aliado -> Rappi</button>
+                    <button class="tab-button px-4 py-2 font-medium text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-700 hover:border-gray-300 focus:outline-none" data-target="webhook-config-tab">Configuración del Webhook</button>
+                </div>
+                
+                <div id="open-orders-tab" class="tab-content bg-white p-6 rounded-2xl shadow-md">
+                    <div id="openOrdersList" class="space-y-4"></div>
+                </div>
+                
+                <div id="allied-orders-tab" class="tab-content hidden bg-white p-6 rounded-2xl shadow-md">
+                    <div id="alliedOrdersList" class="space-y-4"></div>
+                </div>
+
+                <div id="webhook-config-tab" class="tab-content hidden bg-white p-6 rounded-2xl shadow-md">
+                    <div id="webhookConfigDisplay"></div>
+                </div>
+            </section>
+        </div>
+    </div>
+    
+    <!-- Modal para Cancelación -->
+    <div id="cancelModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden overflow-y-auto h-full w-full">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <h3 id="cancelModalTitle" class="text-lg font-bold text-[#4c2c24] mb-4">Cancelar Orden</h3>
+            <form id="cancelForm" class="space-y-4">
+                <input type="hidden" id="cancelOrderId" name="orderId">
+                <input type="hidden" id="cancelEventUuid" name="eventUuid">
+
+                <div>
+                    <label id="cancelReasonLabel" for="cancelReason" class="block text-sm font-medium text-gray-700">Motivo de Cancelación</label>
+                    <select id="cancelReason" name="cancelReason" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                        <option value="">Selecciona una razón</option>
+                        <option value="technical_issues">technical_issues</option>
+                        <option value="total_products_removed">total_products_removed</option>
+                        <option value="order_id_duplicated">order_id_duplicated (Requiere detalles)</option>
+                        <option value="products_not_found">products_not_found (Requiere detalles)</option>
+                        <option value="products_stock_out">products_stock_out (Requiere detalles)</option>
+                        <option value="products_price_difference">products_price_difference (Requiere detalles)</option>
+                        <option value="store_not_found">store_not_found</option>
+                        <option value="total_value_inconsistent">total_value_inconsistent</option>
+                        <option value="user_first_name">user_first_name</option>
+                        <option value="user_last_name">user_last_name</option>
+                        <option value="user_identification">user_identification</option>
+                        <option value="user_email">user_email</option>
+                        <option value="user_phone_number">user_phone_number</option>
+                        <option value="address_street_address">address_street_address</option>
+                        <option value="address_number">address_number</option>
+                        <option value="address_neighborhood">address_neighborhood</option>
+                        <option value="address_city">address_city</option>
+                        <option value="address_state">address_state</option>
+                        <option value="address_zip_code">address_zip_code</option>
+                        <option value="delivery_time">delivery_time</option>
+                        <option value="departure_time">departure_time</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label id="cancelDetailsLabel" for="cancelDetails" class="block text-sm font-medium text-gray-700">JSON de Detalles</label>
+                    <textarea id="cancelDetails" name="cancelDetails" rows="4" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm font-mono" placeholder="Ingresa el JSON de detalles aquí."></textarea>
+                </div>
+
+                <div class="flex justify-end space-x-2">
+                    <button type="button" onclick="closeCancelModal()" class="px-4 py-2 rounded-lg text-gray-700 bg-gray-200 hover:bg-gray-300 transition">Cancelar</button>
+                    <button type="submit" id="sendCancelBtn" class="px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition">Enviar Cancelación</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal para Sustitución -->
+    <div id="substitutionModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden overflow-y-auto h-full w-full">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <h3 id="substitutionModalTitle" class="text-lg font-bold text-[#4c2c24] mb-4">Sustituir Producto</h3>
+            <form id="substitutionForm" class="space-y-4">
+                <input type="hidden" id="substitutionOrderId" name="orderId">
+                <input type="hidden" id="substitutionEventUuid" name="eventUuid">
+                <input type="hidden" id="substitutionOriginalProductId" name="originalProductId">
+
+                <div>
+                    <label id="substitutionNewProductIdLabel" for="substitutionNewProductId" class="block text-sm font-medium text-gray-700">ID del Producto de Sustitución</label>
+                    <input type="text" id="substitutionNewProductId" name="newProductId" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                </div>
+
+                <div>
+                    <label id="substitutionUnitsLabel" for="substitutionUnits" class="block text-sm font-medium text-gray-700">Unidades a Sustituir</label>
+                    <input type="number" id="substitutionUnits" name="units" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                </div>
+
+                <div>
+                    <label id="substitutionWeightUnitsLabel" for="substitutionWeightUnits" class="block text-sm font-medium text-gray-700">Unidades de Peso (opcional)</label>
+                    <input type="number" id="substitutionWeightUnits" name="weightUnits" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                </div>
+
+                <div class="flex justify-end space-x-2">
+                    <button type="button" onclick="closeSubstitutionModal()" class="px-4 py-2 rounded-lg text-gray-700 bg-gray-200 hover:bg-gray-300 transition">Cancelar</button>
+                    <button type="submit" id="substituteBtn" class="px-4 py-2 rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">Sustituir</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
