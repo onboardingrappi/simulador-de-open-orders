@@ -384,8 +384,8 @@
                 logLoadingConfig: (type) => `Configuração de ${type} carregada do Firestore.`,
                 logNoConfig: (type) => `Nenhuma configuração de ${type} encontrada. Por favor, insira uma URL.`,
                 logErrorLoadingConfig: (type, message) => `Erro ao carregar a configuração de ${type}: ${message}`,
-                logErrorParsingJson: "Erro: O JSON de detalhes não é válido.",
-                logSubstitutionSent: "Substituição enviada. Por favor, simule o evento de modificação do Rappi.",
+                logErrorParsingJson: "Erro: O JSON de detalhes no es v\u00E1lido.",
+                logSubstitutionSent: "Substitui\u00E7\u00E3o enviada. Por favor, simule o evento de modifica\u00E7\u00E3o do Rappi.",
             }
         };
 
@@ -407,7 +407,7 @@
                 rappiAuthTitle: t.rappiAuthTitle,
                 countryLabel: t.country,
                 authenticateBtn: t.authenticate,
-                webhookUrlLabel: t.webhookUrl,
+                webhookUrl: t.webhookUrl,
                 saveWebhookBtn: t.saveWebhook,
                 webhookAuthTitle: t.webhookAuthTitle,
                 headerName: t.headerName,
@@ -619,7 +619,7 @@
                         url: webhookUrl,
                         updatedAt: serverTimestamp(),
                         userId: userId
-                    });
+                    }, { merge: true });
                     addLog('logSavingWebhook', 'success', [webhookUrl]);
                 } catch (error) {
                     addLog('logError', 'error', ['Error al guardar la URL del webhook: ' + error.message]);
@@ -635,10 +635,10 @@
 
             if (isAuthReady && headerName && tokenValue) {
                 try {
-                    await updateDoc(webhookConfigDocRef, {
+                    await setDoc(webhookConfigDocRef, {
                         authHeaderName: headerName,
                         authToken: tokenValue
-                    });
+                    }, { merge: true });
                     webhookAuthHeaderName = headerName;
                     webhookAuthToken = tokenValue;
                     addLog('logWebhookSaved', 'success');
@@ -1295,7 +1295,7 @@
                             url: webhookUrl,
                             updatedAt: serverTimestamp(),
                             userId: userId
-                        });
+                        }, { merge: true });
                         addLog('logSavingWebhook', 'success', [webhookUrl]);
                     } catch (error) {
                         addLog('logError', 'error', ['Error al guardar la URL del webhook: ' + error.message]);
@@ -1310,10 +1310,10 @@
     
                 if (isAuthReady && headerName && tokenValue) {
                     try {
-                        await updateDoc(webhookConfigDocRef, {
+                        await setDoc(webhookConfigDocRef, {
                             authHeaderName: headerName,
                             authToken: tokenValue
-                        });
+                        }, { merge: true });
                         webhookAuthHeaderName = headerName;
                         webhookAuthToken = tokenValue;
                         addLog('logWebhookSaved', 'success');
