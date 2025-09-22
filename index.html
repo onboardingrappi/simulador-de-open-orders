@@ -38,20 +38,18 @@
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
-
+        let app;
+        let db;
+        let auth;
         let userId = null;
         let isAuthReady = false;
         let rappiApiUrl = 'https://services.rappi.com.br'; // URL por defecto
         let rappiAccessToken = '';
         let webhookAuthHeaderName = '';
         let webhookAuthToken = '';
-
-        const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/orders`);
-        const webhookConfigDocRef = doc(db, `artifacts/${appId}/public/data/webhooks/config`);
-        const rappiConfigDocRef = doc(db, `artifacts/${appId}/public/data/rappi-config/credentials`);
+        let ordersCollectionRef;
+        let webhookConfigDocRef;
+        let rappiConfigDocRef;
 
         const logs = [];
 
@@ -401,28 +399,19 @@
                 userIdText: t.userId,
                 createOrderTitle: t.createOrderTitle,
                 clientDataTitle: t.clientDataTitle,
-                clientNameLabel: t.clientName,
-                clientLastNameLabel: t.clientLastName,
-                clientEmailLabel: t.clientEmail,
-                clientPhoneLabel: t.clientPhone,
                 storeDataTitle: t.storeDataTitle,
-                storeIdLabel: t.storeId,
-                storeNameLabel: t.storeName,
-                storePhysicalIdLabel: t.storePhysicalId,
                 productsTitle: t.productsTitle,
                 addProductBtn: t.addProduct,
                 triggerOrderBtn: t.simulateOrder,
                 technicalInfoTitle: t.technicalInfoTitle,
                 rappiAuthTitle: t.rappiAuthTitle,
-                clientId: t.clientId,
-                clientSecret: t.clientSecret,
                 countryLabel: t.country,
                 authenticateBtn: t.authenticate,
                 webhookUrlLabel: t.webhookUrl,
                 saveWebhookBtn: t.saveWebhook,
                 webhookAuthTitle: t.webhookAuthTitle,
-                webhookAuthHeaderNameLabel: t.headerName,
-                webhookAuthTokenLabel: t.authToken,
+                headerName: t.headerName,
+                authToken: t.authToken,
                 saveAuthBtn: t.saveAuth,
                 logsTitle: t.logsTitle,
                 firestoreDataTitle: t.firestoreDataTitle,
@@ -433,7 +422,6 @@
                 cancelBtn: t.cancelBtn,
                 sendCancel: t.sendCancel,
                 substitutionModalTitle: t.substitutionModalTitle,
-                substitutionNewProductIdLabel: t.substitutionProductId,
                 substitutionUnitsLabel: t.substitutionUnits,
                 substitutionWeightUnitsLabel: t.substitutionWeightUnits,
                 substituteBtn: t.substituteBtn,
@@ -551,9 +539,6 @@
                     updateUI(selectedLang);
                 });
             }
-            // Agregamos el primer producto y luego actualizamos la UI
-            addProductBtn.click();
-            updateUI(langSelect.value);
         });
         
         // Función para agregar un mensaje a los logs
@@ -579,29 +564,7 @@
         };
 
         // Escucha el estado de autenticación
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                userId = user.uid;
-                addLog('logUserAuth', 'success', [userId]);
-                userIdDisplay.textContent = `${translations[langSelect.value].userId} ${userId}`;
-                isAuthReady = true;
-
-                loadConfigs();
-                setupFirestoreListeners();
-            } else {
-                try {
-                    addLog('logUserAuth', 'info');
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (error) {
-                    addLog('logError', 'error', ['Error al iniciar sesión: ' + error.message]);
-                }
-            }
-        });
-
+        
         const loadConfigs = async () => {
             loadWebhookConfig();
             loadRappiConfig();
@@ -1284,6 +1247,132 @@
             });
         });
 
+        // Inicialización de Firebase y configuración de oyentes
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+        
+        ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/orders`);
+        webhookConfigDocRef = doc(db, `artifacts/${appId}/public/data/webhooks/config`);
+        rappiConfigDocRef = doc(db, `artifacts/${appId}/public/data/rappi-config/credentials`);
+
+        // Escucha del estado de autenticación de Firebase
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                addLog('logUserAuth', 'success', [userId]);
+                userIdDisplay.textContent = `${translations[langSelect.value].userId} ${userId}`;
+                isAuthReady = true;
+
+                loadConfigs();
+                setupFirestoreListeners();
+            } else {
+                try {
+                    addLog('logUserAuth', 'info');
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    addLog('logError', 'error', ['Error al iniciar sesión: ' + error.message]);
+                }
+            }
+        });
+
+        window.addEventListener('DOMContentLoaded', () => {
+            // Agrega el primer producto y luego actualiza la UI
+            addProductBtn.click();
+            updateUI(langSelect.value);
+            
+            // Re-asigna los event listeners
+            webhookForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const webhookUrl = webhookUrlInput.value.trim();
+                if (isAuthReady && webhookUrl) {
+                    try {
+                        await setDoc(webhookConfigDocRef, {
+                            url: webhookUrl,
+                            updatedAt: serverTimestamp(),
+                            userId: userId
+                        });
+                        addLog('logSavingWebhook', 'success', [webhookUrl]);
+                    } catch (error) {
+                        addLog('logError', 'error', ['Error al guardar la URL del webhook: ' + error.message]);
+                    }
+                }
+            });
+            
+            webhookAuthForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const headerName = webhookAuthHeaderNameInput.value.trim();
+                const tokenValue = webhookAuthTokenInput.value.trim();
+    
+                if (isAuthReady && headerName && tokenValue) {
+                    try {
+                        await updateDoc(webhookConfigDocRef, {
+                            authHeaderName: headerName,
+                            authToken: tokenValue
+                        });
+                        webhookAuthHeaderName = headerName;
+                        webhookAuthToken = tokenValue;
+                        addLog('logWebhookSaved', 'success');
+                    } catch (error) {
+                        addLog('logError', 'error', ['Error al guardar la autenticación del webhook: ' + error.message]);
+                    }
+                } else {
+                    addLog('logWebhookFieldsEmpty', 'error');
+                }
+            });
+            
+            authForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const clientId = document.getElementById('clientId').value;
+                const clientSecret = document.getElementById('clientSecret').value;
+                const country = document.getElementById('countrySelect').value;
+    
+                if (isAuthReady && clientId && clientSecret) {
+                    try {
+                        await setDoc(rappiConfigDocRef, {
+                            client_id: clientId,
+                            client_secret: clientSecret,
+                            country: country,
+                            updatedAt: serverTimestamp(),
+                            userId: userId
+                        });
+                        addLog('logCredentialsSaved', 'success');
+                        
+                        rappiApiUrl = countryUrls[country];
+                        addLog('logUrlUpdated', 'info', [country, rappiApiUrl]);
+    
+                        // Simular la llamada a la API de autenticación
+                        addLog('Realizando llamada a la API de autenticación de Rappi...', 'info');
+                        const authResponse = await fetch(`${rappiApiUrl}/api/open-api/login`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ client_id: clientId, client_secret: clientSecret })
+                        });
+    
+                        if (authResponse.ok) {
+                            const data = await authResponse.json();
+                            if (data.access_token && data.token_type) {
+                                rappiAccessToken = `${data.token_type} ${data.access_token}`;
+                                addLog('logRappiAuthSuccess', 'success');
+                            } else {
+                                 addLog('logRappiAuthResponseError', 'error');
+                            }
+                        } else {
+                            addLog('logRappiCallError', 'error', [authResponse.status, await authResponse.text()]);
+                        }
+    
+                    } catch (error) {
+                        addLog('logError', 'error', ['Error al autenticar: ' + error.message]);
+                    }
+                } else {
+                    addLog('logNoCredentials', 'error');
+                }
+            });
+        });
     </script>
     <style>
         .title-font {
