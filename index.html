@@ -29,7 +29,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Establece el nivel de log para depuración
         setLogLevel('debug');
@@ -50,6 +50,7 @@
         let ordersCollectionRef;
         let webhookConfigDocRef;
         let rappiConfigDocRef;
+        let integrationMode = 'webhook';
 
         const logs = [];
 
@@ -78,18 +79,135 @@
         const sendCancelBtn = document.getElementById('sendCancelBtn');
         const substituteBtn = document.getElementById('substituteBtn');
         const langSelect = document.getElementById('langSelect');
-
-        const countryUrls = {
-            'ARG': 'https://services.rappi.com.ar',
-            'BRA': 'https://services.rappi.com.br',
-            'CHL': 'https://services.rappi.cl',
-            'COL': 'https://services.grability.rappi.com',
-            'CRI': 'https://services.rappi.co.cr',
-            'ECU': 'https://services.rappi.com.ec',
-            'MEX': 'https://services.mxgrability.rappi.com',
-            'PER': 'https://services.rappi.pe',
-            'URY': 'https://services.rappi.com.uy'
+        const totalPriceOriginalDisplay = document.getElementById('totalPriceOriginalDisplay');
+        const totalDiscountDisplay = document.getElementById('totalDiscountDisplay');
+        const finalPriceDisplay = document.getElementById('finalPriceDisplay');
+        const integrationModeSelect = document.getElementById('integrationMode');
+        const checkOrdersPollingBtn = document.getElementById('checkOrdersPollingBtn');
+        
+        const COUNTRY_URLS = {
+            ARG: 'https://services.rappi.com.ar',
+            BRA: 'https://services.rappi.com.br',
+            CHL: 'https://services.rappi.cl',
+            COL: 'https://services.grability.rappi.com',
+            CRI: 'https://services.rappi.co.cr',
+            ECU: 'https://services.rappi.com.ec',
+            MEX: 'https://services.mxgrability.rappi.com',
+            PER: 'https://services.rappi.pe',
+            URY: 'https://services.rappi.com.uy',
         };
+
+        // --- Lógica del Rate Limiter y Token ---
+        const RATE_LIMIT_PER_MIN = 15;
+        let queue = [];
+        setInterval(() => {
+            let permits = RATE_LIMIT_PER_MIN;
+            while (permits > 0 && queue.length) {
+                const next = queue.shift();
+                permits--;
+                next();
+            }
+        }, 60 * 1000);
+
+        function enqueueRequest(fn) {
+            return new Promise((resolve, reject) => {
+                queue.push(async () => {
+                    try { resolve(await fn()); }
+                    catch (e) { reject(e); }
+                });
+            });
+        }
+        
+        async function loginCPG({ country, client_id, client_secret }) {
+            const base = COUNTRY_URLS[country];
+            if (!base) throw new Error(`País no soportado: ${country}`);
+
+            const res = await fetch(`${base}/api/open-api/login`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json', 'accept': 'application/json' },
+                body: JSON.stringify({ client_id, client_secret }),
+            });
+
+            if (!res.ok) {
+                const text = await res.text().catch(()=> '');
+                throw new Error(`Login failed ${res.status}: ${text}`);
+            }
+            const data = await res.json(); 
+            const now = Date.now();
+            const expiresAt = now + (Number(data.expires_in ?? 0) * 1000);
+            const token = `${data.token_type} ${data.access_token}`;
+
+            // Guardar en localStorage para persistencia
+            localStorage.setItem(`rappiToken:${country}`, JSON.stringify({ token, expiresAt }));
+            addLog('logRappiAuthSuccess', 'success');
+
+            return { token, expiresAt };
+        }
+        
+        async function getValidToken(country, credsProvider) {
+            const raw = localStorage.getItem(`rappiToken:${country}`);
+            if (raw) {
+                const { token, expiresAt } = JSON.parse(raw);
+                // refrescamos si faltan < 5 min
+                if (Date.now() < (expiresAt - 5 * 60 * 1000)) {
+                    addLog('Token de Rappi reutilizado desde el almacenamiento local.', 'info');
+                    return token;
+                }
+            }
+            addLog('Token de Rappi expirado o no encontrado. Autenticando...', 'info');
+            const { client_id, client_secret } = await credsProvider();
+            const { token } = await loginCPG({ country, client_id, client_secret });
+            return token;
+        }
+
+        async function rappiFetch({ country, path, method='GET', body, credsProvider, eventUuid }) {
+            return enqueueRequest(async () => {
+                let token = await getValidToken(country, credsProvider);
+
+                const base = COUNTRY_URLS[country];
+                const doFetch = async () => {
+                    const headers = {
+                        'content-type': 'application/json',
+                        'accept': 'application/json',
+                        'Authorization': token
+                    };
+                    if (eventUuid) {
+                        headers['event_uuid'] = eventUuid;
+                    }
+
+                    const res = await fetch(`${base}${path}`, {
+                        method,
+                        headers,
+                        body: body ? JSON.stringify(body) : undefined,
+                    });
+
+                    if (res.status === 401) {
+                        // token inválido/expirado → relogin único y reintento
+                        localStorage.removeItem(`rappiToken:${country}`);
+                        token = await getValidToken(country, credsProvider);
+                        addLog('Token invalidado. Intentando volver a autenticarse...', 'error');
+                        return doFetch();
+                    }
+                    if (res.status === 429) {
+                        // backoff exponencial mínimo
+                        addLog('Límite de tasa de Rappi superado (429). Reintentando en 1.5s...', 'error');
+                        await new Promise(r => setTimeout(r, 1500));
+                        return doFetch();
+                    }
+                    if (!res.ok) {
+                        const text = await res.text().catch(()=> '');
+                        throw new Error(`${method} ${path} -> ${res.status}: ${text}`);
+                    }
+                    if (res.status === 204) {
+                        return {};
+                    }
+                    return res.json().catch(() => ({}));
+                };
+
+                return doFetch();
+            });
+        }
+        // --- Fin de la lógica del Rate Limiter y Token ---
 
         const reasonsWithDetails = [
             'order_id_duplicated',
@@ -122,6 +240,11 @@
                 clientSecret: "Client Secret",
                 country: "País",
                 authenticate: "Autenticarse",
+                integrationModeTitle: "Modo de Integración del Aliado",
+                integrationModeWebhook: "Webhook",
+                integrationModePolling: "Polling",
+                integrationModeBoth: "Ambos (Webhook & Polling)",
+                checkOrders: "Consultar Órdenes",
                 webhookUrl: "URL del Webhook del Aliado",
                 saveWebhook: "Guardar URL del Webhook",
                 webhookAuthTitle: "Autenticación del Webhook",
@@ -166,6 +289,9 @@
                 substitutionUnits: "Unidades a Sustituir",
                 substitutionWeightUnits: "Unidades de Peso (opcional)",
                 substituteBtn: "Sustituir",
+                totalPriceOriginal: "Precio Total Original:",
+                totalDiscount: "Descuento Total:",
+                finalPrice: "Precio Final:",
                 logUserAuth: (id) => `Usuario autenticado con ID: ${id}`,
                 logAuthReady: "La autenticación no está lista. Por favor, espere.",
                 logNoProducts: "Por favor, agregue al menos un producto a la orden.",
@@ -177,6 +303,10 @@
                 logWebhookSuccess: (status) => `Webhook llamado con éxito. Estado: ${status}`,
                 logWebhookError: (status, response) => `Error en la llamada al webhook. Estado: ${status}. Respuesta: ${response}`,
                 logNoWebhook: "No se ha configurado una URL de webhook. Notificación no enviada.",
+                logPollingEnabled: "Modo de integración 'Polling' o 'Ambos' activado. El webhook no será llamado automáticamente.",
+                logCheckingOrders: "Consultando órdenes pendientes del endpoint de Rappi...",
+                logPollingSuccess: (count) => `Consulta de polling exitosa. Se encontraron ${count} órdenes.`,
+                logPollingError: (message) => `Error en la consulta de polling: ${message}`,
                 logRappiAuthError: "No hay un token de autenticación de Rappi. Por favor, autentíquese primero.",
                 logRappiApiCall: (url) => `Llamando al endpoint de Rappi: ${url}`,
                 logRappiCallSuccess: (endpoint) => `Llamada a Rappi exitosa para el endpoint ${endpoint}.`,
@@ -218,6 +348,11 @@
                 clientSecret: "Client Secret",
                 country: "Country",
                 authenticate: "Authenticate",
+                integrationModeTitle: "Partner Integration Mode",
+                integrationModeWebhook: "Webhook",
+                integrationModePolling: "Polling",
+                integrationModeBoth: "Both (Webhook & Polling)",
+                checkOrders: "Check for Orders",
                 webhookUrl: "Partner Webhook URL",
                 saveWebhook: "Save Webhook URL",
                 webhookAuthTitle: "Webhook Authentication",
@@ -262,6 +397,9 @@
                 substitutionUnits: "Units to Substitute",
                 substitutionWeightUnits: "Weight Units (optional)",
                 substituteBtn: "Substitute",
+                totalPriceOriginal: "Total Original Price:",
+                totalDiscount: "Total Discount:",
+                finalPrice: "Final Price:",
                 logUserAuth: (id) => `User authenticated with ID: ${id}`,
                 logAuthReady: "Authentication is not ready. Please wait.",
                 logNoProducts: "Please add at least one product to the order.",
@@ -273,6 +411,10 @@
                 logWebhookSuccess: (status) => `Webhook called successfully. Status: ${status}`,
                 logWebhookError: (status, response) => `Webhook call failed. Status: ${status}. Response: ${response}`,
                 logNoWebhook: "No webhook URL configured. Notification not sent.",
+                logPollingEnabled: "'Polling' or 'Both' integration mode enabled. Webhook will not be called automatically.",
+                logCheckingOrders: "Checking for pending orders from Rappi endpoint...",
+                logPollingSuccess: (count) => `Polling successful. Found ${count} orders.`,
+                logPollingError: (message) => `Polling query failed: ${message}`,
                 logRappiAuthError: "No Rappi authentication token. Please authenticate first.",
                 logRappiApiCall: (url) => `Calling Rappi endpoint: ${url}`,
                 logRappiCallSuccess: (endpoint) => `Rappi call successful for endpoint ${endpoint}.`,
@@ -314,6 +456,11 @@
                 clientSecret: "Client Secret",
                 country: "País",
                 authenticate: "Autenticar",
+                integrationModeTitle: "Modo de Integração do Parceiro",
+                integrationModeWebhook: "Webhook",
+                integrationModePolling: "Polling",
+                integrationModeBoth: "Ambos (Webhook e Polling)",
+                checkOrders: "Consultar Pedidos",
                 webhookUrl: "URL do Webhook do Parceiro",
                 saveWebhook: "Salvar URL do Webhook",
                 webhookAuthTitle: "Autenticação do Webhook",
@@ -358,6 +505,9 @@
                 substitutionUnits: "Unidades a Substituir",
                 substitutionWeightUnits: "Unidades de Peso (opcional)",
                 substituteBtn: "Substituir",
+                totalPriceOriginal: "Preço Total Original:",
+                totalDiscount: "Desconto Total:",
+                finalPrice: "Preço Final:",
                 logUserAuth: (id) => `Usuário autenticado com ID: ${id}`,
                 logAuthReady: "A autenticação não está pronta. Por favor, aguarde.",
                 logNoProducts: "Por favor, adicione pelo menos um produto ao pedido.",
@@ -369,6 +519,10 @@
                 logWebhookSuccess: (status) => `Webhook chamado com sucesso. Status: ${status}`,
                 logWebhookError: (status, response) => `A chamada de webhook falhou. Status: ${status}. Resposta: ${response}`,
                 logNoWebhook: "Nenhuma URL de webhook configurada. Notificação não enviada.",
+                logPollingEnabled: "Modo de integração 'Polling' ou 'Ambos' ativado. Webhook não será chamado automaticamente.",
+                logCheckingOrders: "Consultando pedidos pendentes do endpoint Rappi...",
+                logPollingSuccess: (count) => `Consulta de polling bem-sucedida. Encontrado ${count} pedidos.`,
+                logPollingError: (message) => `A consulta de polling falhou: ${message}`,
                 logRappiAuthError: "Nenhum token de autenticação Rappi. Por favor, autentique-se primeiro.",
                 logRappiApiCall: (url) => `Chamando o endpoint Rappi: ${url}`,
                 logRappiCallSuccess: (endpoint) => `Chamada Rappi bem-sucedida para o endpoint ${endpoint}.`,
@@ -384,7 +538,7 @@
                 logLoadingConfig: (type) => `Configuração de ${type} carregada do Firestore.`,
                 logNoConfig: (type) => `Nenhuma configuração de ${type} encontrada. Por favor, insira uma URL.`,
                 logErrorLoadingConfig: (type, message) => `Erro ao carregar a configuração de ${type}: ${message}`,
-                logErrorParsingJson: "Erro: O JSON de detalhes no es v\u00E1lido.",
+                logErrorParsingJson: "Erro: O JSON de detalles no es válido.",
                 logSubstitutionSent: "Substitui\u00E7\u00E3o enviada. Por favor, simule o evento de modifica\u00E7\u00E3o do Rappi.",
             }
         };
@@ -407,6 +561,8 @@
                 rappiAuthTitle: t.rappiAuthTitle,
                 countryLabel: t.country,
                 authenticateBtn: t.authenticate,
+                integrationModeTitle: t.integrationModeTitle,
+                checkOrdersPollingBtn: t.checkOrders,
                 webhookUrl: t.webhookUrl,
                 saveWebhookBtn: t.saveWebhook,
                 webhookAuthTitle: t.webhookAuthTitle,
@@ -425,6 +581,9 @@
                 substitutionUnitsLabel: t.substitutionUnits,
                 substitutionWeightUnitsLabel: t.substitutionWeightUnits,
                 substituteBtn: t.substituteBtn,
+                totalPriceOriginalDisplay: t.totalPriceOriginal,
+                totalDiscountDisplay: t.totalDiscount,
+                finalPriceDisplay: t.finalPrice
             };
 
             for (const id in elements) {
@@ -436,6 +595,10 @@
                          // Manejo especial para el select de motivo de cancelación
                          if (el.id === 'cancelReason') {
                              el.options[0].textContent = t.selectReason;
+                         } else if (el.id === 'integrationMode') {
+                            el.options[0].textContent = t.integrationModeWebhook;
+                            el.options[1].textContent = t.integrationModePolling;
+                            el.options[2].textContent = t.integrationModeBoth;
                          }
                     } else {
                         el.textContent = elements[id];
@@ -524,11 +687,37 @@
                 orders.forEach(orderItem => {
                     const buttonsDiv = orderItem.querySelector('.flex-wrap');
                     if (buttonsDiv) {
-                        const newButtonsHTML = getFlowButtons(orderItem.dataset.order, orderItem.dataset.flowType);
+                        const newButtonsHTML = getFlowButtons(JSON.parse(orderItem.dataset.order), orderItem.dataset.flowType);
                         buttonsDiv.innerHTML = newButtonsHTML;
                     }
                 });
             });
+        };
+
+        const calculateTotals = () => {
+            let totalOriginalPrice = 0;
+            let totalDiscount = 0;
+            let finalPrice = 0;
+
+            const productItems = productsContainer.querySelectorAll('.product-item');
+            productItems.forEach(item => {
+                const productPrice = parseFloat(item.querySelector('[name="productPrice"]').value) || 0;
+                const productPriceDiscount = parseFloat(item.querySelector('[name="productPriceDiscount"]').value) || 0;
+                const productQuantity = parseInt(item.querySelector('[name="productQuantity"]').value) || 1;
+
+                totalOriginalPrice += productPrice * productQuantity;
+                
+                if (productPriceDiscount > 0) {
+                    totalDiscount += (productPrice - productPriceDiscount) * productQuantity;
+                    finalPrice += productPriceDiscount * productQuantity;
+                } else {
+                    finalPrice += productPrice * productQuantity;
+                }
+            });
+
+            totalPriceOriginalDisplay.textContent = `${translations[langSelect.value].totalPriceOriginal} $${totalOriginalPrice.toFixed(2)}`;
+            totalDiscountDisplay.textContent = `${translations[langSelect.value].totalDiscount} $${totalDiscount.toFixed(2)}`;
+            finalPriceDisplay.textContent = `${translations[langSelect.value].finalPrice} $${finalPrice.toFixed(2)}`;
         };
 
         // Escucha el cambio de idioma
@@ -537,6 +726,7 @@
                 langSelect.addEventListener('change', (e) => {
                     const selectedLang = e.target.value;
                     updateUI(selectedLang);
+                    calculateTotals();
                 });
             }
         });
@@ -563,13 +753,97 @@
             logsContainer.prepend(logItem);
         };
 
-        // Escucha el estado de autenticación
-        
-        const loadConfigs = async () => {
-            loadWebhookConfig();
-            loadRappiConfig();
+        const setupFirestoreListeners = () => {
+            // Escucha cambios en la configuración del webhook
+            onSnapshot(webhookConfigDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    displayWebhookConfig(docSnap.data());
+                } else {
+                    displayWebhookConfig(null);
+                }
+            });
+
+            // Escucha cambios en la colección de órdenes en tiempo real
+            onSnapshot(ordersCollectionRef, (querySnapshot) => {
+                const openOrders = [];
+                const alliedOrders = [];
+                querySnapshot.forEach((doc) => {
+                    const orderData = { ...doc.data(), id: doc.id };
+                    if (['created', 'invoice_reported', 'finished', 'canceled'].includes(orderData.status)) {
+                         if (orderData.status === 'created') {
+                             openOrders.push(orderData);
+                         } else {
+                             alliedOrders.push(orderData);
+                         }
+                    }
+                });
+
+                renderOrders(openOrders, openOrdersList, 'rappi-to-partner');
+                renderOrders(alliedOrders, alliedOrdersList, 'partner-to-rappi');
+            });
         };
 
+        const getFlowButtons = (order, flowType) => {
+            const t = translations[langSelect.value];
+            let buttonsHTML = '';
+            
+            if (flowType === 'rappi-to-partner') {
+                if (order.status === 'created') {
+                    buttonsHTML = `
+                        <button onclick="updateOrderStatusFromUI('${order.orderId}', 'courier_assigned', 'rappi-to-partner')" class="bg-blue-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-blue-600 transition duration-200">${t.simulateCourierAssigned}</button>
+                    `;
+                }
+                if (order.status === 'invoice_reported' && order.courier && order.courier.first_name) {
+                    buttonsHTML += `
+                        <button onclick="updateOrderStatusFromUI('${order.orderId}', 'finished', 'rappi-to-partner')" class="bg-green-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-green-600 transition duration-200">${t.simulateOrderDelivered}</button>
+                    `;
+                }
+            } else if (flowType === 'partner-to-rappi') {
+                if (order.status === 'created') {
+                    buttonsHTML = `
+                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'start_picking', '${order.event_uuid}', { picking_time: 15 }, 'POST')" class="bg-indigo-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-indigo-600 transition duration-200">${t.simulatePicking}</button>
+                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'report_invoice', '${order.event_uuid}', { total_price: 12.5, image_url: '' }, 'POST')" class="bg-orange-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-orange-600 transition duration-200">${t.simulateReportInvoice}</button>
+                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'request_courier', '${order.event_uuid}', { store_id: ${order.store.id}, vehicle_type: 'car' }, 'POST')" class="bg-purple-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-purple-600 transition duration-200">${t.simulateRequestCourier}</button>
+                        <button onclick="openCancelModal('${order.id.replace('order_','')}', '${order.event_uuid}')" class="bg-red-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-red-600 transition duration-200">${t.cancelOrder}</button>
+                        <button onclick="openSubstitutionModal('${order.id.replace('order_','')}', '${order.event_uuid}', 'original_product_id')" class="bg-yellow-500 text-gray-800 px-3 py-1 rounded-lg text-xs hover:bg-yellow-600 transition duration-200">Simular Sustitución</button>
+                    `;
+                }
+                if (order.status === 'invoice_reported') {
+                    buttonsHTML += `
+                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'request_courier', '${order.event_uuid}', { store_id: ${order.store.id}, vehicle_type: 'car' }, 'POST')" class="bg-purple-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-purple-600 transition duration-200">${t.simulateRequestCourier}</button>
+                    `;
+                }
+            }
+
+            return buttonsHTML;
+        };
+
+        const renderOrders = (orders, container, flowType) => {
+            container.innerHTML = '';
+            if (orders.length === 0) {
+                container.innerHTML = `<p class="text-gray-500">${translations[langSelect.value].noOrders}</p>`;
+                return;
+            }
+
+            orders.forEach(order => {
+                const orderDiv = document.createElement('div');
+                orderDiv.className = 'order-item p-4 border border-gray-300 rounded-lg shadow-sm bg-white';
+                orderDiv.dataset.order = JSON.stringify(order);
+                orderDiv.dataset.flowType = flowType;
+                orderDiv.innerHTML = `
+                    <h4 class="font-bold text-lg">Orden #${order.id}</h4>
+                    <p class="text-sm text-gray-600">Estado: <span class="font-semibold text-[#4c2c24]">${order.status}</span></p>
+                    <p class="text-xs text-gray-500 mt-1">ID de Evento: ${order.event_uuid}</p>
+                    <pre class="mt-2 text-xs text-gray-700 whitespace-pre-wrap rounded-lg bg-gray-100 p-2">${JSON.stringify(order, null, 2)}</pre>
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        ${getFlowButtons(order, flowType)}
+                    </div>
+                `;
+                container.appendChild(orderDiv);
+            });
+            updateUI(langSelect.value);
+        };
+        
         // Cargar configuración del webhook desde Firestore
         const loadWebhookConfig = async () => {
             try {
@@ -581,6 +855,8 @@
                     webhookAuthToken = data.authToken || '';
                     webhookAuthHeaderNameInput.value = data.authHeaderName || '';
                     webhookAuthTokenInput.value = data.authToken || '';
+                    integrationMode = data.integrationMode || 'webhook';
+                    integrationModeSelect.value = integrationMode;
                     addLog('logLoadingConfig', 'info', ['webhook']);
                 } else {
                     addLog('logNoConfig', 'info', ['webhook']);
@@ -599,7 +875,7 @@
                     document.getElementById('clientId').value = data.client_id || '';
                     document.getElementById('clientSecret').value = data.client_secret || '';
                     document.getElementById('countrySelect').value = data.country || 'COL';
-                    rappiApiUrl = countryUrls[data.country] || rappiApiUrl;
+                    rappiApiUrl = COUNTRY_URLS[data.country] || rappiApiUrl;
                     addLog('logLoadingConfig', 'info', ['Rappi']);
                 } else {
                     addLog('logNoConfig', 'info', ['Rappi']);
@@ -609,6 +885,11 @@
             }
         };
         
+        const loadConfigs = async () => {
+            await loadWebhookConfig();
+            await loadRappiConfig();
+        };
+
         // Guardar la URL del webhook en Firestore
         webhookForm.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -656,48 +937,83 @@
             const clientId = document.getElementById('clientId').value;
             const clientSecret = document.getElementById('clientSecret').value;
             const country = document.getElementById('countrySelect').value;
+    
+            if (!isAuthReady) {
+                addLog('logAuthReady', 'error');
+                return;
+            }
 
-            if (isAuthReady && clientId && clientSecret) {
-                try {
-                    await setDoc(rappiConfigDocRef, {
-                        client_id: clientId,
-                        client_secret: clientSecret,
-                        country: country,
-                        updatedAt: serverTimestamp(),
-                        userId: userId
-                    });
-                    addLog('logCredentialsSaved', 'success');
-                    
-                    rappiApiUrl = countryUrls[country];
-                    addLog('logUrlUpdated', 'info', [country, rappiApiUrl]);
-
-                    // Simular la llamada a la API de autenticación
-                    addLog('Realizando llamada a la API de autenticación de Rappi...', 'info');
-                    const authResponse = await fetch(`${rappiApiUrl}/api/open-api/login`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ client_id: clientId, client_secret: clientSecret })
-                    });
-
-                    if (authResponse.ok) {
-                        const data = await authResponse.json();
-                        if (data.access_token && data.token_type) {
-                            rappiAccessToken = `${data.token_type} ${data.access_token}`;
-                            addLog('logRappiAuthSuccess', 'success');
-                        } else {
-                             addLog('logRappiAuthResponseError', 'error');
-                        }
-                    } else {
-                        addLog('logRappiCallError', 'error', [authResponse.status, await authResponse.text()]);
-                    }
-
-                } catch (error) {
-                    addLog('logError', 'error', ['Error al autenticar: ' + error.message]);
-                }
-            } else {
+            if (!clientId || !clientSecret) {
                 addLog('logNoCredentials', 'error');
+                return;
+            }
+            try {
+                await setDoc(rappiConfigDocRef, {
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    country: country,
+                    updatedAt: serverTimestamp(),
+                    userId: userId
+                }, { merge: true });
+                addLog('logCredentialsSaved', 'success');
+                
+                // Actualizar la URL de la API con el país seleccionado
+                rappiApiUrl = COUNTRY_URLS[country];
+                addLog('logUrlUpdated', 'info', [country, rappiApiUrl]);
+
+                addLog('Realizando llamada a la API de autenticación de Rappi...', 'info');
+                
+                const loginCPG = async ({ country, client_id, client_secret }) => {
+                    const base = COUNTRY_URLS[country];
+                    if (!base) throw new Error(`País no soportado: ${country}`);
+
+                    const res = await fetch(`${base}/api/open-api/login`, {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json', 'accept': 'application/json' },
+                        body: JSON.stringify({ client_id, client_secret }),
+                    });
+
+                    if (!res.ok) {
+                        const text = await res.text().catch(()=> '');
+                        throw new Error(`Login failed ${res.status}: ${text}`);
+                    }
+                    const data = await res.json(); 
+                    const now = Date.now();
+                    const expiresAt = now + (Number(data.expires_in ?? 0) * 1000);
+                    const token = `${data.token_type} ${data.access_token}`;
+
+                    localStorage.setItem(`rappiToken:${country}`, JSON.stringify({ token, expiresAt }));
+
+                    return { token, expiresAt };
+                };
+                
+                try {
+                    const { token } = await loginCPG({ country, client_id, client_secret });
+                    rappiAccessToken = token;
+                    addLog('logRappiAuthSuccess', 'success');
+                } catch (e) {
+                    addLog('logRappiCallError', 'error', [e.message]);
+                }
+            } catch (error) {
+                addLog('logError', 'error', ['Error al autenticar: ' + error.message]);
             }
         });
+
+        // Manejar el cambio del modo de integración
+        integrationModeSelect.addEventListener('change', async (e) => {
+            integrationMode = e.target.value;
+            if (isAuthReady) {
+                await setDoc(webhookConfigDocRef, { integrationMode: integrationMode }, { merge: true });
+            }
+            addLog('logIntegrationModeUpdated', 'info', [integrationMode]);
+        });
+        
+        countrySelect.addEventListener('change', (e) => {
+             rappiApiUrl = COUNTRY_URLS[e.target.value];
+             addLog('logUrlUpdated', 'info', [e.target.value, rappiApiUrl]);
+             calculateTotals();
+        });
+
 
         // Añadir un nuevo campo de producto
         addProductBtn.addEventListener('click', () => {
@@ -754,6 +1070,13 @@
                 </div>
             `;
             productsContainer.appendChild(productDiv);
+            calculateTotals();
+        });
+
+        productsContainer.addEventListener('input', (e) => {
+            if (e.target.closest('.product-item')) {
+                calculateTotals();
+            }
         });
 
         // Manejar la visibilidad de los campos de preferencia
@@ -767,12 +1090,14 @@
                     userChoosesFields.classList.add('hidden');
                 }
             }
+            calculateTotals();
         });
 
         // Eliminar producto
         productsContainer.addEventListener('click', (e) => {
             if (e.target.classList.contains('remove-product-btn')) {
                 e.target.closest('.product-item').remove();
+                calculateTotals();
             }
         });
 
@@ -884,7 +1209,11 @@
                 await setDoc(doc(ordersCollectionRef, orderId), orderData);
                 addLog('logOrderCreated', 'success', [orderId]);
 
-                await triggerWebhook(orderData);
+                if (integrationMode === 'webhook' || integrationMode === 'both') {
+                    await triggerWebhook(orderData);
+                } else if (integrationMode === 'polling') {
+                    addLog('logPollingEnabled', 'info');
+                }
             } catch (error) {
                 addLog('logError', 'error', ['Error al procesar la orden: ' + error.message]);
             }
@@ -922,7 +1251,7 @@
                      updateData.total_price = newTotalPrice;
                 }
 
-                await updateDoc(orderDocRef, updateData);
+                await setDoc(orderDocRef, updateData, { merge: true });
                 addLog('logOrderUpdated', 'success', [orderId, newStatus]);
 
                 // Enviar notificación de webhook si el cambio de estado es iniciado por Rappi
@@ -967,6 +1296,46 @@
                 addLog('logNoWebhook', 'info');
             }
         };
+        
+        // Lógica de Polling
+        const checkOrdersPolling = async () => {
+             if (!isAuthReady) {
+                 addLog('logAuthReady', 'error');
+                 return;
+             }
+             if (integrationMode === 'webhook') {
+                 addLog('Modo de integración es Webhook. No se realizará polling.', 'info');
+                 return;
+             }
+             addLog('logCheckingOrders', 'info');
+             try {
+                 const credsProvider = () => getRappiCreds();
+                 const country = countrySelect.value;
+                 
+                 const path = `/api/open-api/v1/orders`;
+                 const response = await rappiFetch({
+                     country,
+                     path,
+                     method: 'GET',
+                     credsProvider,
+                 });
+
+                 if (response && response.length > 0) {
+                     addLog('logPollingSuccess', 'success', [response.length]);
+                     // Aquí podrías procesar las órdenes recibidas
+                     response.forEach(order => {
+                         addLog(`Orden ${order.id} recibida por polling.`, 'info');
+                     });
+                 } else {
+                     addLog('Consulta de polling exitosa. No se encontraron órdenes pendientes.', 'info');
+                 }
+
+             } catch (e) {
+                 addLog('logPollingError', 'error', [e.message]);
+             }
+        };
+        checkOrdersPollingBtn.addEventListener('click', checkOrdersPolling);
+
 
         // Lógica de cancelación
         window.openCancelModal = (rappiOrderId, eventUuid) => {
@@ -1011,7 +1380,7 @@
             }
 
             closeCancelModal();
-            await callRappiEndpoint(rappiOrderId, 'cancel', eventUuid, body);
+            await callRappiEndpoint(rappiOrderId, 'cancel', eventUuid, body, 'POST');
         });
         
         // Lógica de sustitución
@@ -1042,161 +1411,51 @@
             };
 
             closeSubstitutionModal();
-            await callRappiEndpoint(rappiOrderId, `products/${originalProductId}/substitution`, eventUuid, body);
+            await callRappiEndpoint(rappiOrderId, `products/${originalProductId}/substitution`, eventUuid, body, 'POST');
         });
-
-        // Escucha de datos en tiempo real de Firestore
-        const setupFirestoreListeners = () => {
-            // Escucha de la colección de órdenes
-            onSnapshot(ordersCollectionRef, (snapshot) => {
-                const allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                const openOrders = allOrders.filter(o => ['created', 'invoice_reported'].includes(o.status));
-                const alliedOrders = allOrders.filter(o => ['started_picking', 'finished', 'canceled', 'assigned_courier'].includes(o.status));
-
-                displayOrders(openOrders, openOrdersList, 'rappi-to-partner');
-                displayOrders(alliedOrders, alliedOrdersList, 'partner-to-rappi');
-            }, (error) => {
-                addLog('logError', 'error', ['Error de escucha de Firestore: ' + error.message]);
-            });
-
-            // Escucha del documento de configuración del webhook
-            onSnapshot(webhookConfigDocRef, (docSnap) => {
-                const webhookData = docSnap.exists() ? docSnap.data() : null;
-                displayWebhookConfig(webhookData);
-            }, (error) => {
-                addLog('logError', 'error', ['Error de escucha de Firestore (Webhook): ' + error.message]);
-            });
-        };
-
-        // Función para mostrar los datos de las órdenes
-        const displayOrders = (orders, container, flowType) => {
-            container.innerHTML = '';
-            const t = translations[langSelect.value];
-            if (orders.length > 0) {
-                orders.forEach(order => {
-                    const orderItem = document.createElement('div');
-                    orderItem.className = 'p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-2 order-item';
-                    orderItem.dataset.order = JSON.stringify(order);
-                    orderItem.dataset.flowType = flowType;
-                    orderItem.innerHTML = `
-                        <div class="flex justify-between items-center">
-                            <span class="font-semibold text-gray-800">Orden ID: ${order.id}</span>
-                            <span class="px-2 py-1 text-xs font-medium rounded-full ${
-                                order.status === 'created' ? 'bg-blue-200 text-blue-800' :
-                                order.status === 'started_picking' ? 'bg-indigo-200 text-indigo-800' :
-                                order.status === 'assigned_courier' ? 'bg-purple-200 text-purple-800' :
-                                order.status === 'finished' ? 'bg-green-200 text-green-800' :
-                                order.status === 'canceled' ? 'bg-red-200 text-red-800' :
-                                'bg-gray-200 text-gray-800'
-                            }">${order.status}</span>
-                        </div>
-                        <pre class="whitespace-pre-wrap text-xs font-mono text-gray-700">${JSON.stringify(order, null, 2)}</pre>
-                        <div class="flex flex-wrap gap-2 mt-2">
-                            ${getFlowButtons(order, flowType)}
-                        </div>
-                    `;
-                    container.appendChild(orderItem);
-                });
-            } else {
-                container.innerHTML = `<p class="text-gray-500 p-4">${t.noOrders}</p>`;
-            }
-        };
-
-        const getFlowButtons = (order, flowType) => {
-            const rappiOrderId = order.id;
-            const orderId = order.orderId;
-            const eventUuid = order.event_uuid;
-            const status = order.status;
-            const t = translations[langSelect.value];
-            let buttons = '';
-            if (flowType === 'partner-to-rappi') {
-                if (status === 'created') {
-                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'start_picking', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulatePicking}</button>`;
-                }
-                if (status === 'created' || status === 'started_picking') {
-                    buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'report_invoice', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateReportInvoice}</button>`;
-                }
-                if (status === 'invoice_reported') {
-                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'request_courier', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateRequestCourier}</button>`;
-                }
-                if (status === 'invoice_reported' || status === 'assigned_courier') {
-                    buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'handshake', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateHandshake}</button>`;
-                }
-                if (status === 'created' || status === 'started_picking') {
-                    order.products.forEach(product => {
-                         buttons += `<button onclick="openSubstitutionModal('${rappiOrderId}', '${eventUuid}', '${product.id}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.substituteBtn}: ${product.name}</button>`;
-                    });
-                }
-                if (status === 'created' || status === 'started_picking') {
-                    buttons += `<button onclick="openCancelModal('${rappiOrderId}', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-red-500 hover:bg-red-600 transition">${t.cancelOrder}</button>`;
-                }
-            } else if (flowType === 'rappi-to-partner') {
-                if (status === 'created') {
-                     buttons += `<button onclick="updateOrderStatusFromUI('order_${rappiOrderId}', 'courier_assigned', 'rappi-to-partner')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-blue-500 hover:bg-blue-600 transition">${t.simulateCourierAssigned}</button>`;
-                }
-                if (status === 'invoice_reported') {
-                     buttons += `<button onclick="updateOrderStatusFromUI('order_${rappiOrderId}', 'finished', 'rappi-to-partner')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-green-500 hover:bg-green-600 transition">${t.simulateOrderDelivered}</button>`;
-                }
-            }
-            return buttons;
-        };
         
-        window.callRappiEndpoint = async (rappiOrderId, endpoint, eventUuid, body = {}) => {
-            if (!rappiAccessToken) {
-                addLog('logRappiAuthError', 'error');
-                return;
+        async function getRappiCreds() {
+            const docSnap = await getDoc(rappiConfigDocRef);
+            if (docSnap.exists()) {
+                const { client_id, client_secret } = docSnap.data();
+                return { client_id, client_secret };
             }
-
-            const endpointUrl = `${rappiApiUrl}/api/open-api/v1/orders/${rappiOrderId}/${endpoint}`;
-            addLog('logRappiApiCall', 'info', [endpointUrl]);
-
-            const headers = { 
-                'Content-Type': 'application/json',
-                'Authorization': rappiAccessToken,
-                'event_uuid': eventUuid
-            };
-            
-            let requestBody = {};
-            
-            if (endpoint.includes('start_picking')) {
-                 requestBody = { picking_time: 15 };
-            } else if (endpoint.includes('report_invoice')) {
-                requestBody = { total_price: 100, image_url: "https://example.com/invoice.jpg" };
-            } else if (endpoint.includes('request__courier')) {
-                requestBody = { store_id: 12345, vehicle_type: "car" };
-            } else if (endpoint.includes('cancel')) {
-                requestBody = body;
-            } else {
-                 requestBody = body;
-            }
-            
+            throw new Error("No se encontraron las credenciales de Rappi en Firestore.");
+        }
+        
+        async function callRappiEndpoint(rappiOrderId, endpoint, eventUuid, body = {}, method = 'POST') {
             try {
-                const response = await fetch(endpointUrl, {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(requestBody)
-                });
+                const credsProvider = () => getRappiCreds();
+                const country = countrySelect.value;
                 
-                if (response.ok) {
-                    addLog('logRappiCallSuccess', 'success', [endpoint]);
-                     if (endpoint.includes('report_invoice')) {
-                        const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
-                        await updateOrderStatus(`order_${rappiOrderId}`, 'invoice_reported', 'partner-to-rappi', newEventUuid);
-                    } else if (endpoint.includes('cancel')) {
-                        const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
-                        await updateOrderStatus(`order_${rappiOrderId}`, 'canceled', 'partner-to-rappi', newEventUuid);
-                    } else if (endpoint.includes('substitution')) {
-                        addLog('logSubstitutionSent', 'info');
-                    }
+                const path = `/api/open-api/v1/orders/${rappiOrderId}/${endpoint}`;
+                addLog('logRappiApiCall', 'info', [COUNTRY_URLS[country] + path]);
 
-                } else {
-                    addLog('logRappiCallError', 'error', [response.status, await response.text()]);
-                    
+                const response = await rappiFetch({
+                    country,
+                    path,
+                    method: method,
+                    body: body,
+                    credsProvider,
+                    eventUuid
+                });
+
+                addLog('logRappiCallSuccess', 'success', [endpoint]);
+
+                if (endpoint.includes('report_invoice')) {
+                    const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
+                    await updateOrderStatus(`order_${rappiOrderId}`, 'invoice_reported', 'partner-to-rappi', newEventUuid);
+                } else if (endpoint.includes('cancel')) {
+                    const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
+                    await updateOrderStatus(`order_${rappiOrderId}`, 'canceled', 'partner-to-rappi', newEventUuid);
+                } else if (endpoint.includes('substitution')) {
+                    addLog('logSubstitutionSent', 'info');
                 }
-            } catch (fetchError) {
-                addLog('Error de red al llamar al webhook: ' + fetchError.message, 'error');
+
+            } catch (e) {
+                addLog('logRappiCallError', 'error', [e.message]);
             }
-        };
+        }
         
         window.updateOrderStatusFromUI = async (orderId, newStatus, flow, newProducts = []) => {
              const docSnap = await getDoc(doc(ordersCollectionRef, orderId));
@@ -1331,45 +1590,64 @@
                 const clientSecret = document.getElementById('clientSecret').value;
                 const country = document.getElementById('countrySelect').value;
     
-                if (isAuthReady && clientId && clientSecret) {
-                    try {
-                        await setDoc(rappiConfigDocRef, {
-                            client_id: clientId,
-                            client_secret: clientSecret,
-                            country: country,
-                            updatedAt: serverTimestamp(),
-                            userId: userId
-                        });
-                        addLog('logCredentialsSaved', 'success');
-                        
-                        rappiApiUrl = countryUrls[country];
-                        addLog('logUrlUpdated', 'info', [country, rappiApiUrl]);
-    
-                        // Simular la llamada a la API de autenticación
-                        addLog('Realizando llamada a la API de autenticación de Rappi...', 'info');
-                        const authResponse = await fetch(`${rappiApiUrl}/api/open-api/login`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ client_id: clientId, client_secret: clientSecret })
-                        });
-    
-                        if (authResponse.ok) {
-                            const data = await authResponse.json();
-                            if (data.access_token && data.token_type) {
-                                rappiAccessToken = `${data.token_type} ${data.access_token}`;
-                                addLog('logRappiAuthSuccess', 'success');
-                            } else {
-                                 addLog('logRappiAuthResponseError', 'error');
-                            }
-                        } else {
-                            addLog('logRappiCallError', 'error', [authResponse.status, await authResponse.text()]);
-                        }
-    
-                    } catch (error) {
-                        addLog('logError', 'error', ['Error al autenticar: ' + error.message]);
-                    }
-                } else {
+                if (!isAuthReady) {
+                    addLog('logAuthReady', 'error');
+                    return;
+                }
+
+                if (!clientId || !clientSecret) {
                     addLog('logNoCredentials', 'error');
+                    return;
+                }
+                try {
+                    await setDoc(rappiConfigDocRef, {
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        country: country,
+                        updatedAt: serverTimestamp(),
+                        userId: userId
+                    }, { merge: true });
+                    addLog('logCredentialsSaved', 'success');
+                    
+                    // Actualizar la URL de la API con el país seleccionado
+                    rappiApiUrl = COUNTRY_URLS[country];
+                    addLog('logUrlUpdated', 'info', [country, rappiApiUrl]);
+
+                    addLog('Realizando llamada a la API de autenticación de Rappi...', 'info');
+                    
+                    const loginCPG = async ({ country, client_id, client_secret }) => {
+                        const base = COUNTRY_URLS[country];
+                        if (!base) throw new Error(`País no soportado: ${country}`);
+
+                        const res = await fetch(`${base}/api/open-api/login`, {
+                            method: 'POST',
+                            headers: { 'content-type': 'application/json', 'accept': 'application/json' },
+                            body: JSON.stringify({ client_id, client_secret }),
+                        });
+
+                        if (!res.ok) {
+                            const text = await res.text().catch(()=> '');
+                            throw new Error(`Login failed ${res.status}: ${text}`);
+                        }
+                        const data = await res.json(); 
+                        const now = Date.now();
+                        const expiresAt = now + (Number(data.expires_in ?? 0) * 1000);
+                        const token = `${data.token_type} ${data.access_token}`;
+
+                        localStorage.setItem(`rappiToken:${country}`, JSON.stringify({ token, expiresAt }));
+
+                        return { token, expiresAt };
+                    };
+                    
+                    try {
+                        const { token } = await loginCPG({ country, client_id, client_secret });
+                        rappiAccessToken = token;
+                        addLog('logRappiAuthSuccess', 'success');
+                    } catch (e) {
+                        addLog('logRappiCallError', 'error', [e.message]);
+                    }
+                } catch (error) {
+                    addLog('logError', 'error', ['Error al autenticar: ' + error.message]);
                 }
             });
         });
@@ -1447,6 +1725,12 @@
                         <button type="button" id="addProductBtn" class="w-full bg-gray-200 text-gray-700 py-2 px-4 rounded-lg shadow-md hover:bg-gray-300 transition duration-300 ease-in-out">
                             Añadir Producto
                         </button>
+                        
+                        <div class="mt-4 p-4 bg-gray-100 rounded-lg space-y-2 text-sm">
+                            <div id="totalPriceOriginalDisplay" class="font-bold"></div>
+                            <div id="totalDiscountDisplay" class="font-bold text-red-500"></div>
+                            <div id="finalPriceDisplay" class="font-bold text-green-600 text-lg"></div>
+                        </div>
 
                         <button type="submit" id="triggerOrderBtn"
                                 class="w-full bg-[#fa3d22] text-white py-2 px-4 rounded-lg shadow-md hover:bg-[#c81c20] transition duration-300 ease-in-out mt-4">
@@ -1491,6 +1775,18 @@
                                 Autenticarse
                         </button>
                     </form>
+
+                    <h3 id="integrationModeTitle" class="text-xl font-semibold text-[#4c2c24]">Modo de Integración del Aliado</h3>
+                    <div class="flex flex-col space-y-4">
+                        <select id="integrationMode" name="integrationMode" class="block w-full px-4 py-2 border rounded-lg shadow-sm text-sm">
+                            <option value="webhook">Webhook</option>
+                            <option value="polling">Polling</option>
+                            <option value="both">Ambos (Webhook & Polling)</option>
+                        </select>
+                        <button type="button" id="checkOrdersPollingBtn" class="w-full bg-[#fa3d22] text-white py-2 px-4 rounded-lg shadow-md hover:bg-[#c81c20] transition duration-300 ease-in-out">
+                            Consultar Órdenes
+                        </button>
+                    </div>
 
                     <form id="webhookForm" class="space-y-4">
                         <label for="webhookUrl" id="webhookUrlLabel" class="block text-sm font-medium text-gray-700">URL del Webhook del Aliado</label>
@@ -1632,4 +1928,3 @@
     </div>
 </body>
 </html>
-
