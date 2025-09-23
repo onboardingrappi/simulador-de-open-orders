@@ -1117,7 +1117,7 @@
                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'report_invoice', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateReportInvoice}</button>`;
                 }
                 if (status === 'invoice_reported') {
-                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'request__courier', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateRequestCourier}</button>`;
+                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'request_courier', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateRequestCourier}</button>`;
                 }
                 if (status === 'invoice_reported' || status === 'assigned_courier') {
                     buttons += `<button onclick="callRappiEndpoint('${rappiOrderId}', 'handshake', '${eventUuid}')" class="px-3 py-1 text-xs font-medium rounded-lg text-white bg-rappi-primary hover:bg-rappi-primary-dark transition">${t.simulateHandshake}</button>`;
@@ -1632,3 +1632,4 @@
     </div>
 </body>
 </html>
+
