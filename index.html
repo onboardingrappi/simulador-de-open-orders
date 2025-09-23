@@ -1523,6 +1523,13 @@
                 userIdDisplay.textContent = `${translations[langSelect.value].userId} ${userId}`;
                 isAuthReady = true;
 
+                // Habilitar formularios después de la autenticación
+                document.querySelectorAll('form').forEach(form => {
+                    form.removeAttribute('disabled');
+                    form.classList.remove('opacity-50');
+                });
+                document.querySelectorAll('input, select, button').forEach(el => el.removeAttribute('disabled'));
+
                 loadConfigs();
                 setupFirestoreListeners();
             } else {
@@ -1540,6 +1547,13 @@
         });
 
         window.addEventListener('DOMContentLoaded', () => {
+            // Deshabilitar formularios hasta que la autenticación esté lista
+            document.querySelectorAll('form').forEach(form => {
+                form.setAttribute('disabled', 'disabled');
+                form.classList.add('opacity-50');
+            });
+            document.querySelectorAll('input, select, button').forEach(el => el.setAttribute('disabled', 'disabled'));
+
             // Agrega el primer producto y luego actualiza la UI
             addProductBtn.click();
             updateUI(langSelect.value);
@@ -1681,7 +1695,7 @@
                     <h2 id="createOrderTitle" class="text-2xl font-bold text-[#4c2c24]">Crear Orden</h2>
 
                     <!-- Formulario para crear la orden -->
-                    <form id="createOrderForm" class="space-y-4">
+                    <form id="createOrderForm" class="space-y-4" disabled>
                         <h3 id="clientDataTitle" class="text-xl font-semibold text-[#4c2c24]">Datos del Cliente</h3>
                         <div>
                             <label for="clientName" id="clientNameLabel" class="block text-sm font-medium text-gray-700">Nombre del Cliente</label>
@@ -1744,7 +1758,7 @@
                     <h2 id="technicalInfoTitle" class="text-2xl font-bold text-[#4c2c24]">Información Técnica</h2>
                     
                     <!-- Formulario de autenticación -->
-                    <form id="authForm" class="space-y-4">
+                    <form id="authForm" class="space-y-4" disabled>
                         <h3 id="rappiAuthTitle" class="text-xl font-semibold text-[#4c2c24]">Autenticación de Rappi</h3>
                         <div>
                             <label for="clientId" id="clientIdLabel" class="block text-sm font-medium text-gray-700">Client ID</label>
@@ -1788,7 +1802,7 @@
                         </button>
                     </div>
 
-                    <form id="webhookForm" class="space-y-4">
+                    <form id="webhookForm" class="space-y-4" disabled>
                         <label for="webhookUrl" id="webhookUrlLabel" class="block text-sm font-medium text-gray-700">URL del Webhook del Aliado</label>
                         <input type="url" id="webhookUrl" name="webhookUrl" placeholder="Ej: https://tudominio.com/webhook" required
                                class="block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-[#fa3d22] focus:border-[#fa3d22]">
@@ -1798,7 +1812,7 @@
                         </button>
                     </form>
                     
-                     <form id="webhookAuthForm" class="space-y-4">
+                     <form id="webhookAuthForm" class="space-y-4" disabled>
                         <h3 id="webhookAuthTitle" class="text-xl font-semibold text-[#4c2c24]">Autenticación del Webhook</h3>
                         <div>
                             <label for="webhookAuthHeaderName" id="webhookAuthHeaderNameLabel" class="block text-sm font-medium text-gray-700">Nombre del Header</label>
@@ -1899,7 +1913,7 @@
     <div id="substitutionModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden overflow-y-auto h-full w-full">
         <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
             <h3 id="substitutionModalTitle" class="text-lg font-bold text-[#4c2c24] mb-4">Sustituir Producto</h3>
-            <form id="substitutionForm" class="space-y-4">
+            <form id="substitutionForm" class="space-y-4" disabled>
                 <input type="hidden" id="substitutionOrderId" name="orderId">
                 <input type="hidden" id="substitutionEventUuid" name="eventUuid">
                 <input type="hidden" id="substitutionOriginalProductId" name="originalProductId">
