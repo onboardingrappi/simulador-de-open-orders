@@ -84,6 +84,8 @@
         const finalPriceDisplay = document.getElementById('finalPriceDisplay');
         const integrationModeSelect = document.getElementById('integrationMode');
         const checkOrdersPollingBtn = document.getElementById('checkOrdersPollingBtn');
+        const orderTypeSelect = document.getElementById('orderType');
+        const scheduledTimeFields = document.getElementById('scheduledTimeFields');
         
         const COUNTRY_URLS = {
             ARG: 'https://services.rappi.com.ar',
@@ -292,6 +294,17 @@
                 totalPriceOriginal: "Precio Total Original:",
                 totalDiscount: "Descuento Total:",
                 finalPrice: "Precio Final:",
+                addressDataTitle: "Datos de Dirección",
+                addressStreet: "Dirección",
+                addressNumber: "Número",
+                addressCity: "Ciudad",
+                addressZipCode: "Código Postal",
+                addressLat: "Latitud",
+                addressLon: "Longitud",
+                orderTypeTitle: "Tipo de Orden",
+                orderTypeNow: "Para Ahora",
+                orderTypeScheduled: "Programada",
+                scheduledTime: "Fecha y Hora Programada",
                 logUserAuth: (id) => `Usuario autenticado con ID: ${id}`,
                 logAuthReady: "La autenticación no está lista. Por favor, espere.",
                 logNoProducts: "Por favor, agregue al menos un producto a la orden.",
@@ -324,6 +337,8 @@
                 logErrorLoadingConfig: (type, message) => `Error al cargar la configuración de ${type}: ${message}`,
                 logErrorParsingJson: "Error: El JSON de detalles no es válido.",
                 logSubstitutionSent: "Sustitución enviada. Por favor, simule el evento de modificación de Rappi.",
+                logCheckUserPreferences: (id) => `Consultando preferencias de usuario para la orden ${id}...`,
+                logUserPreferencesFound: "Preferencias de usuario encontradas.",
             },
             en: {
                 pageTitle: "Open Orders Integration Simulator",
@@ -400,6 +415,17 @@
                 totalPriceOriginal: "Total Original Price:",
                 totalDiscount: "Total Discount:",
                 finalPrice: "Final Price:",
+                addressDataTitle: "Address Data",
+                addressStreet: "Street Address",
+                addressNumber: "Number",
+                addressCity: "City",
+                addressZipCode: "Zip Code",
+                addressLat: "Latitude",
+                addressLon: "Longitude",
+                orderTypeTitle: "Order Type",
+                orderTypeNow: "For Now",
+                orderTypeScheduled: "Scheduled",
+                scheduledTime: "Scheduled Date and Time",
                 logUserAuth: (id) => `User authenticated with ID: ${id}`,
                 logAuthReady: "Authentication is not ready. Please wait.",
                 logNoProducts: "Please add at least one product to the order.",
@@ -432,6 +458,8 @@
                 logErrorLoadingConfig: (type, message) => `Error loading ${type} configuration: ${message}`,
                 logErrorParsingJson: "Error: The details JSON is not valid.",
                 logSubstitutionSent: "Substitution sent. Please simulate the Rappi modification event.",
+                logCheckUserPreferences: (id) => `Consultando preferencias de usuario para la orden ${id}...`,
+                logUserPreferencesFound: "Preferencias de usuario encontradas.",
             },
             pt: {
                 pageTitle: "Simulador de Integração Open Orders",
@@ -508,6 +536,17 @@
                 totalPriceOriginal: "Preço Total Original:",
                 totalDiscount: "Desconto Total:",
                 finalPrice: "Preço Final:",
+                addressDataTitle: "Dados de Endereço",
+                addressStreet: "Endereço",
+                addressNumber: "Número",
+                addressCity: "Cidade",
+                addressZipCode: "CEP",
+                addressLat: "Latitude",
+                addressLon: "Longitude",
+                orderTypeTitle: "Tipo de Pedido",
+                orderTypeNow: "Para Agora",
+                orderTypeScheduled: "Agendado",
+                scheduledTime: "Data e Hora Agendada",
                 logUserAuth: (id) => `Usuário autenticado com ID: ${id}`,
                 logAuthReady: "A autenticação não está pronta. Por favor, aguarde.",
                 logNoProducts: "Por favor, adicione pelo menos um produto ao pedido.",
@@ -538,7 +577,7 @@
                 logLoadingConfig: (type) => `Configuração de ${type} carregada do Firestore.`,
                 logNoConfig: (type) => `Nenhuma configuração de ${type} encontrada. Por favor, insira uma URL.`,
                 logErrorLoadingConfig: (type, message) => `Erro ao carregar a configuração de ${type}: ${message}`,
-                logErrorParsingJson: "Erro: O JSON de detalles no es válido.",
+                logErrorParsingJson: "Erro: El JSON de detalles no es válido.",
                 logSubstitutionSent: "Substitui\u00E7\u00E3o enviada. Por favor, simule o evento de modifica\u00E7\u00E3o do Rappi.",
             }
         };
@@ -583,7 +622,15 @@
                 substituteBtn: t.substituteBtn,
                 totalPriceOriginalDisplay: t.totalPriceOriginal,
                 totalDiscountDisplay: t.totalDiscount,
-                finalPriceDisplay: t.finalPrice
+                finalPriceDisplay: t.finalPrice,
+                addressDataTitle: t.addressDataTitle,
+                addressStreetLabel: t.addressStreet,
+                addressNumberLabel: t.addressNumber,
+                addressCityLabel: t.addressCity,
+                addressZipCodeLabel: t.addressZipCode,
+                addressLatLabel: t.addressLat,
+                addressLonLabel: t.addressLon,
+                orderTypeTitle: t.orderTypeTitle
             };
 
             for (const id in elements) {
@@ -599,6 +646,9 @@
                             el.options[0].textContent = t.integrationModeWebhook;
                             el.options[1].textContent = t.integrationModePolling;
                             el.options[2].textContent = t.integrationModeBoth;
+                         } else if (el.id === 'orderType') {
+                             el.options[0].textContent = t.orderTypeNow;
+                             el.options[1].textContent = t.orderTypeScheduled;
                          }
                     } else {
                         el.textContent = elements[id];
@@ -626,6 +676,12 @@
             document.getElementById('storeId').placeholder = t.storeId;
             document.getElementById('storeName').placeholder = t.storeName;
             document.getElementById('storePhysicalId').placeholder = t.storePhysicalId;
+            document.getElementById('addressStreet').placeholder = t.addressStreet;
+            document.getElementById('addressNumber').placeholder = t.addressNumber;
+            document.getElementById('addressCity').placeholder = t.addressCity;
+            document.getElementById('addressZipCode').placeholder = t.addressZipCode;
+            document.getElementById('addressLat').placeholder = t.addressLat;
+            document.getElementById('addressLon').placeholder = t.addressLon;
             document.getElementById('clientId').placeholder = t.clientId;
             document.getElementById('clientSecret').placeholder = t.clientSecret;
             document.getElementById('webhookUrl').placeholder = t.webhookUrl;
@@ -672,12 +728,6 @@
                     if (el) el.textContent = labels[key];
                 }
 
-                // Traducir las opciones del select de preferencias
-                const userPrefSelect = item.querySelector('select[name="userPreferenceAction"]');
-                userPrefSelect.options[0].textContent = t.userPreferenceNone;
-                userPrefSelect.options[1].textContent = t.userPreferenceRefund;
-                userPrefSelect.options[2].textContent = t.userPreferenceShopper;
-                userPrefSelect.options[3].textContent = t.userPreferenceUser;
             });
             
             // Traducir los botones en las órdenes
@@ -702,13 +752,13 @@
             const productItems = productsContainer.querySelectorAll('.product-item');
             productItems.forEach(item => {
                 const productPrice = parseFloat(item.querySelector('[name="productPrice"]').value) || 0;
-                const productPriceDiscount = parseFloat(item.querySelector('[name="productPriceDiscount"]').value) || 0;
+                const productPriceDiscount = parseFloat(item.querySelector('[name="productPriceDiscount"]').value) || null;
                 const productQuantity = parseInt(item.querySelector('[name="productQuantity"]').value) || 1;
 
                 totalOriginalPrice += productPrice * productQuantity;
                 
-                if (productPriceDiscount > 0) {
-                    totalDiscount += (productPrice - productPriceDiscount) * productQuantity;
+                if (productPriceDiscount !== null) {
+                    totalDiscount += (productPrice * productQuantity) - (productPriceDiscount * productQuantity);
                     finalPrice += productPriceDiscount * productQuantity;
                 } else {
                     finalPrice += productPrice * productQuantity;
@@ -768,7 +818,7 @@
                 const openOrders = [];
                 const alliedOrders = [];
                 querySnapshot.forEach((doc) => {
-                    const orderData = { ...doc.data(), id: doc.id };
+                    const orderData = { ...doc.data() };
                     if (['created', 'invoice_reported', 'finished', 'canceled'].includes(orderData.status)) {
                          if (orderData.status === 'created') {
                              openOrders.push(orderData);
@@ -790,27 +840,28 @@
             if (flowType === 'rappi-to-partner') {
                 if (order.status === 'created') {
                     buttonsHTML = `
-                        <button onclick="updateOrderStatusFromUI('${order.orderId}', 'courier_assigned', 'rappi-to-partner')" class="bg-blue-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-blue-600 transition duration-200">${t.simulateCourierAssigned}</button>
+                        <button onclick="updateOrderStatusFromUI('${order.id}', 'courier_assigned', 'rappi-to-partner')" class="bg-blue-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-blue-600 transition duration-200">${t.simulateCourierAssigned}</button>
+                        <button onclick="callRappiEndpoint('${order.id}', 'start_picking', '${order.event_uuid}', { picking_time: 15 }, 'POST', 'partner-to-rappi')" class="bg-indigo-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-indigo-600 transition duration-200">${t.simulatePicking}</button>
                     `;
                 }
                 if (order.status === 'invoice_reported' && order.courier && order.courier.first_name) {
                     buttonsHTML += `
-                        <button onclick="updateOrderStatusFromUI('${order.orderId}', 'finished', 'rappi-to-partner')" class="bg-green-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-green-600 transition duration-200">${t.simulateOrderDelivered}</button>
+                        <button onclick="updateOrderStatusFromUI('${order.id}', 'finished', 'rappi-to-partner')" class="bg-green-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-green-600 transition duration-200">${t.simulateOrderDelivered}</button>
                     `;
                 }
             } else if (flowType === 'partner-to-rappi') {
                 if (order.status === 'created') {
                     buttonsHTML = `
-                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'start_picking', '${order.event_uuid}', { picking_time: 15 }, 'POST')" class="bg-indigo-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-indigo-600 transition duration-200">${t.simulatePicking}</button>
-                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'report_invoice', '${order.event_uuid}', { total_price: 12.5, image_url: '' }, 'POST')" class="bg-orange-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-orange-600 transition duration-200">${t.simulateReportInvoice}</button>
-                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'request_courier', '${order.event_uuid}', { store_id: ${order.store.id}, vehicle_type: 'car' }, 'POST')" class="bg-purple-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-purple-600 transition duration-200">${t.simulateRequestCourier}</button>
-                        <button onclick="openCancelModal('${order.id.replace('order_','')}', '${order.event_uuid}')" class="bg-red-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-red-600 transition duration-200">${t.cancelOrder}</button>
-                        <button onclick="openSubstitutionModal('${order.id.replace('order_','')}', '${order.event_uuid}', 'original_product_id')" class="bg-yellow-500 text-gray-800 px-3 py-1 rounded-lg text-xs hover:bg-yellow-600 transition duration-200">Simular Sustitución</button>
+                        <button onclick="callRappiEndpoint('${order.id}', 'report_invoice', '${order.event_uuid}', { total_price: 12.5, image_url: '' }, 'POST', 'partner-to-rappi')" class="bg-orange-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-orange-600 transition duration-200">${t.simulateReportInvoice}</button>
+                        <button onclick="callRappiEndpoint('${order.id}', 'request_courier', '${order.event_uuid}', { store_id: ${order.store.id}, vehicle_type: 'car' }, 'POST', 'partner-to-rappi')" class="bg-purple-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-purple-600 transition duration-200">${t.simulateRequestCourier}</button>
+                        <button onclick="openCancelModal('${order.id}', '${order.event_uuid}')" class="bg-red-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-red-600 transition duration-200">${t.cancelOrder}</button>
+                        <button onclick="callRappiEndpoint('${order.id}', 'products/${order.products[0].id}/substitution', '${order.event_uuid}', {id: 'new_product_id', units: 1}, 'POST', 'partner-to-rappi')" class="bg-yellow-500 text-gray-800 px-3 py-1 rounded-lg text-xs hover:bg-yellow-600 transition duration-200">Simular Sustitución</button>
+                        <button onclick="callRappiEndpoint('${order.id}', 'user_preferences', '${order.event_uuid}', {}, 'GET')" class="bg-gray-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-gray-600 transition duration-200">Polling User Prefs</button>
                     `;
                 }
                 if (order.status === 'invoice_reported') {
                     buttonsHTML += `
-                        <button onclick="callRappiEndpoint('${order.id.replace('order_','')}', 'request_courier', '${order.event_uuid}', { store_id: ${order.store.id}, vehicle_type: 'car' }, 'POST')" class="bg-purple-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-purple-600 transition duration-200">${t.simulateRequestCourier}</button>
+                        <button onclick="callRappiEndpoint('${order.id}', 'request_courier', '${order.event_uuid}', { store_id: ${order.store.id}, vehicle_type: 'car' }, 'POST', 'partner-to-rappi')" class="bg-purple-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-purple-600 transition duration-200">${t.simulateRequestCourier}</button>
                     `;
                 }
             }
@@ -1014,6 +1065,14 @@
              calculateTotals();
         });
 
+        orderTypeSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'scheduled') {
+                scheduledTimeFields.classList.remove('hidden');
+            } else {
+                scheduledTimeFields.classList.add('hidden');
+            }
+        });
+
 
         // Añadir un nuevo campo de producto
         addProductBtn.addEventListener('click', () => {
@@ -1049,25 +1108,6 @@
                     <label class="block text-xs text-gray-600">${t.productQuantity}</label>
                     <input type="number" name="productQuantity" value="1" min="1" required class="w-full px-2 py-1 border rounded-md text-sm">
                 </div>
-                <div>
-                    <label class="block text-xs text-gray-600">${t.userPreferences}</label>
-                    <select name="userPreferenceAction" class="w-full px-2 py-1 border rounded-md text-sm">
-                        <option value="">${t.userPreferenceNone}</option>
-                        <option value="refund">${t.userPreferenceRefund}</option>
-                        <option value="shopper_chooses">${t.userPreferenceShopper}</option>
-                        <option value="user_chooses">${t.userPreferenceUser}</option>
-                    </select>
-                </div>
-                <div class="user-chooses-fields space-y-2 hidden">
-                    <div>
-                        <label class="block text-xs text-gray-600">${t.userPreferredProductId}</label>
-                        <input type="text" name="userPreferredProductId" placeholder="${t.userPreferredProductId}" class="w-full px-2 py-1 border rounded-md text-sm">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-600">${t.userPreferredProductName}</label>
-                        <input type="text" name="userPreferredProductName" placeholder="${t.userPreferredProductName}" class="w-full px-2 py-1 border rounded-md text-sm">
-                    </div>
-                </div>
             `;
             productsContainer.appendChild(productDiv);
             calculateTotals();
@@ -1077,20 +1117,6 @@
             if (e.target.closest('.product-item')) {
                 calculateTotals();
             }
-        });
-
-        // Manejar la visibilidad de los campos de preferencia
-        productsContainer.addEventListener('change', (e) => {
-            if (e.target.name === 'userPreferenceAction') {
-                const parentDiv = e.target.closest('.product-item');
-                const userChoosesFields = parentDiv.querySelector('.user-chooses-fields');
-                if (e.target.value === 'user_chooses') {
-                    userChoosesFields.classList.remove('hidden');
-                } else {
-                    userChoosesFields.classList.add('hidden');
-                }
-            }
-            calculateTotals();
         });
 
         // Eliminar producto
@@ -1111,58 +1137,45 @@
 
             const formData = new FormData(createOrderForm);
             const products = [];
-            let totalPrice = 0;
-
+            
             const productItems = productsContainer.querySelectorAll('.product-item');
             if (productItems.length === 0) {
                 addLog('logNoProducts', 'error');
                 return;
             }
 
+            let finalPrice = 0;
+
             productItems.forEach(item => {
                 const productId = item.querySelector('[name="productId"]').value;
                 const productName = item.querySelector('[name="productName"]').value;
                 const productSku = item.querySelector('[name="productSku"]').value;
-                const productPrice = parseFloat(item.querySelector('[name="productPrice"]').value) || 0;
+                const unitPrice = parseFloat(item.querySelector('[name="productPrice"]').value) || 0;
                 const productPriceDiscount = parseFloat(item.querySelector('[name="productPriceDiscount"]').value) || null;
                 const productQuantity = parseInt(item.querySelector('[name="productQuantity"]').value) || 1;
-                const userPreferenceAction = item.querySelector('[name="userPreferenceAction"]').value;
-
-                const priceToUse = productPriceDiscount !== null ? productPriceDiscount : productPrice;
 
                 const product = {
                     "id": productId,
                     "ean": "",
                     "sku": productSku,
                     "name": productName,
-                    "price": productPrice,
+                    "price": unitPrice * productQuantity,
                     "quantity": { "type": "units", "units": productQuantity },
                     "volumetry": { "size": 0, "heavy": false, "weight": 0, "fragile": false, "weight_unit": "" },
-                    "unit_price": productPrice,
+                    "unit_price": unitPrice,
                     "description": "",
                     "price_with_discount": productPriceDiscount
                 };
-
-                if (userPreferenceAction) {
-                    const userPreference = { "action": userPreferenceAction };
-                    if (userPreferenceAction === 'user_chooses') {
-                        const preferredProductId = item.querySelector('[name="userPreferredProductId"]').value;
-                        const preferredProductName = item.querySelector('[name="userPreferredProductName"]').value;
-                        userPreference.preferred_product = {
-                            "id": preferredProductId,
-                            "name": preferredProductName
-                        };
-                    }
-                    product.user_preference = userPreference;
-                }
                 
                 products.push(product);
-                totalPrice += priceToUse * productQuantity;
+                
+                const priceToUse = productPriceDiscount !== null ? productPriceDiscount : unitPrice;
+                finalPrice += priceToUse * productQuantity;
             });
             
             const combos = []; 
 
-            const orderId = `order_${Date.now()}`;
+            const orderId = `${Date.now()}`;
             const clientName = formData.get('clientName');
             const clientLastName = formData.get('clientLastName');
             const clientEmail = formData.get('clientEmail');
@@ -1172,8 +1185,21 @@
             const storeName = formData.get('storeName');
             const storePhysicalId = formData.get('storePhysicalId');
 
+            const addressStreet = formData.get('addressStreet');
+            const addressNumber = formData.get('addressNumber');
+            const addressCity = formData.get('addressCity');
+            const addressZipCode = formData.get('addressZipCode');
+            const addressLat = parseFloat(formData.get('addressLat')) || 0;
+            const addressLon = parseFloat(formData.get('addressLon')) || 0;
+
+            const orderType = formData.get('orderType');
+            let placeAt = null;
+            if (orderType === 'scheduled') {
+                placeAt = new Date(formData.get('scheduledTime')).toISOString();
+            }
+
             const orderData = {
-                "id": parseInt(orderId.replace('order_', '')),
+                "id": parseInt(orderId),
                 "store": { 
                     "id": storeId ? parseInt(storeId) : '', 
                     "name": storeName || '', 
@@ -1189,13 +1215,21 @@
                 },
                 "combos": combos,
                 "status": "created",
-                "address": { "city": "Bogotá, D.C.", "number": "", "region": "Bogotá, D.C.", "latitude": 4.657975, "zip_code": "111221", "longitude": -74.0755719, "street_address": "Calle 64 # 28 - 70" },
+                "address": {
+                    "city": addressCity || '',
+                    "number": addressNumber || '',
+                    "region": addressCity || '',
+                    "latitude": addressLat,
+                    "zip_code": addressZipCode || '',
+                    "longitude": addressLon,
+                    "street_address": addressStreet || ''
+                },
                 "courier": { "phone": "", "last_name": "", "first_name": "", "vehicle_type": "" },
-                "place_at": new Date().toISOString(),
+                "place_at": placeAt,
                 "products": products,
                 "created_at": new Date().toISOString(),
                 "event_uuid": "9290be0f-071c-4ac5-b058-edec44da3f15",
-                "total_price": totalPrice,
+                "total_price": finalPrice,
                 "delivered_at": "",
                 "payment_method": "cash",
                 "cancelation_info": { "canceled_by": "", "description": "" },
@@ -1228,6 +1262,9 @@
 
             try {
                 const orderDocRef = doc(ordersCollectionRef, orderId);
+                const docSnap = await getDoc(orderDocRef);
+                const orderData = docSnap.data();
+
                 const updateData = {
                     status: newStatus,
                     flow: flow,
@@ -1335,6 +1372,37 @@
              }
         };
         checkOrdersPollingBtn.addEventListener('click', checkOrdersPolling);
+        
+        // Lógica de polling para user preferences
+        window.checkUserPreferences = async (orderId) => {
+             if (!isAuthReady) {
+                 addLog('logAuthReady', 'error');
+                 return;
+             }
+             addLog('logCheckUserPreferences', 'info', [orderId]);
+             try {
+                 const credsProvider = () => getRappiCreds();
+                 const country = countrySelect.value;
+                 
+                 const path = `/api/open-api/v1/orders/${orderId}/user_preferences`;
+                 const response = await rappiFetch({
+                     country,
+                     path,
+                     method: 'GET',
+                     credsProvider,
+                 });
+
+                 if (response) {
+                     addLog('logUserPreferencesFound', 'success');
+                     addLog(`Preferencias de usuario para la orden ${orderId}: ${JSON.stringify(response)}`, 'info');
+                 } else {
+                     addLog('No se encontraron preferencias de usuario para esta orden.', 'info');
+                 }
+
+             } catch (e) {
+                 addLog('logPollingError', 'error', [e.message]);
+             }
+        };
 
 
         // Lógica de cancelación
@@ -1423,8 +1491,8 @@
             throw new Error("No se encontraron las credenciales de Rappi en Firestore.");
         }
         
-        async function callRappiEndpoint(rappiOrderId, endpoint, eventUuid, body = {}, method = 'POST') {
-            try {
+        async function callRappiEndpoint(rappiOrderId, endpoint, eventUuid, body = {}, method = 'POST', flow = 'rappi-to-partner') {
+             try {
                 const credsProvider = () => getRappiCreds();
                 const country = countrySelect.value;
                 
@@ -1442,15 +1510,21 @@
 
                 addLog('logRappiCallSuccess', 'success', [endpoint]);
 
-                if (endpoint.includes('report_invoice')) {
+                if (endpoint.includes('start_picking')) {
                     const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
-                    await updateOrderStatus(`order_${rappiOrderId}`, 'invoice_reported', 'partner-to-rappi', newEventUuid);
+                    await updateOrderStatus(rappiOrderId, 'created', 'partner-to-rappi', newEventUuid);
+                } else if (endpoint.includes('report_invoice')) {
+                    const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
+                    await updateOrderStatus(rappiOrderId, 'invoice_reported', 'partner-to-rappi', newEventUuid);
                 } else if (endpoint.includes('cancel')) {
                     const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
-                    await updateOrderStatus(`order_${rappiOrderId}`, 'canceled', 'partner-to-rappi', newEventUuid);
+                    await updateOrderStatus(rappiOrderId, 'canceled', 'partner-to-rappi', newEventUuid);
                 } else if (endpoint.includes('substitution')) {
-                    addLog('logSubstitutionSent', 'info');
+                     addLog('logSubstitutionSent', 'info');
+                     const newEventUuid = response.headers.get('event_uuid') || crypto.randomUUID();
+                     await updateOrderStatus(rappiOrderId, 'created', 'partner-to-rappi', newEventUuid);
                 }
+
 
             } catch (e) {
                 addLog('logRappiCallError', 'error', [e.message]);
@@ -1462,15 +1536,7 @@
              if (docSnap.exists()) {
                  const orderData = docSnap.data();
                  const event_uuid = crypto.randomUUID();
-                 let finalStatus = orderData.status;
-                 
-                 if (newStatus === 'courier_assigned') {
-                     finalStatus = orderData.status;
-                 }
-                 if (newStatus === 'finished') {
-                     finalStatus = ['invoice_reported', 'assigned_courier'].includes(orderData.status) ? 'finished' : orderData.status;
-                     
-                 }
+                 let finalStatus = newStatus;
                  
                  const courierData = newStatus === 'courier_assigned' ? { phone: '18003334444', last_name: 'Johnson', first_name: 'Jane', vehicle_type: 'motorbike' } : orderData.courier;
 
@@ -1728,6 +1794,51 @@
                         <div>
                             <label for="storePhysicalId" id="storePhysicalIdLabel" class="block text-sm font-medium text-gray-700">ID Físico de la Tienda</label>
                             <input type="number" id="storePhysicalId" name="storePhysicalId" placeholder="ID Físico de la Tienda" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+
+                        <hr class="border-gray-300 my-4">
+
+                        <h3 id="addressDataTitle" class="text-xl font-semibold text-[#4c2c24]">Datos de Dirección</h3>
+                        <div>
+                            <label for="addressStreet" id="addressStreetLabel" class="block text-sm font-medium text-gray-700">Dirección</label>
+                            <input type="text" id="addressStreet" name="addressStreet" placeholder="Dirección" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label for="addressNumber" id="addressNumberLabel" class="block text-sm font-medium text-gray-700">Número</label>
+                            <input type="text" id="addressNumber" name="addressNumber" placeholder="Número" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label for="addressCity" id="addressCityLabel" class="block text-sm font-medium text-gray-700">Ciudad</label>
+                            <input type="text" id="addressCity" name="addressCity" placeholder="Ciudad" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label for="addressZipCode" id="addressZipCodeLabel" class="block text-sm font-medium text-gray-700">Código Postal</label>
+                            <input type="text" id="addressZipCode" name="addressZipCode" placeholder="Código Postal" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                        </div>
+                         <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="addressLat" id="addressLatLabel" class="block text-sm font-medium text-gray-700">Latitud</label>
+                                <input type="number" step="any" id="addressLat" name="addressLat" placeholder="Latitud" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                            </div>
+                            <div>
+                                <label for="addressLon" id="addressLonLabel" class="block text-sm font-medium text-gray-700">Longitud</label>
+                                <input type="number" step="any" id="addressLon" name="addressLon" placeholder="Longitud" required class="block w-full px-4 py-2 border rounded-lg text-sm">
+                            </div>
+                        </div>
+
+                        <hr class="border-gray-300 my-4">
+                        
+                        <h3 id="orderTypeTitle" class="text-xl font-semibold text-[#4c2c24]">Tipo de Orden</h3>
+                        <select id="orderType" name="orderType" class="block w-full px-4 py-2 border rounded-lg shadow-sm text-sm">
+                            <option value="now">Para Ahora</option>
+                            <option value="scheduled">Programada</option>
+                        </select>
+                        
+                        <div id="scheduledTimeFields" class="space-y-4 hidden">
+                            <div>
+                                <label for="scheduledTime" id="scheduledTimeLabel" class="block text-sm font-medium text-gray-700">Fecha y Hora Programada</label>
+                                <input type="datetime-local" id="scheduledTime" name="scheduledTime" class="block w-full px-4 py-2 border rounded-lg text-sm">
+                            </div>
                         </div>
 
                         <hr class="border-gray-300 my-4">
